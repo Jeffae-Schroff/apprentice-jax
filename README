@@ -4,7 +4,7 @@ The important dimensions of the data are that it has:
 2 parameters
 2 observables
 42 MC runs
-20 bins (per observable, although observables can have different numbers of bins)
+20 bins (per observable, although generally observables can have different numbers of bins)
 
 I still want to stick with this for testing over the new real data because it has two parameters instead of one,
 which can help catch issues in the code. I don't how much you need to understand the h5 file to do your task, but
