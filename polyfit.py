@@ -10,14 +10,18 @@ import json
 
 class Polyfit:
     def __init__(self, pcoeffs_npz, chi2res_npz, **kwargs):
-        """ Fit polynomials of order order to each bin in input_h5.
-        If no kwargs are given, it instead assumes fit_json stores fits from a previous instance
+        """ 
+        If 'input_h5' are 'order' are given, fit polynomials of order order to each bin in input_h5,
+        then store them in npz files(pcoeffs_npz, chi2res_npz, cov_npz(if given))
+        If 'input_h5' and 'order' are not given, it assumes pcoeffs_npz, chi2res_npz
+        store fits from a previous polyfit instance
+        The pceoff, chi2res dicts have the binids as keys with leading '\' characters stripped.
 
         Mandatory arguments:
-        pcoeffs_npz -- filepath for npz file which will contain the polynomial coefficients
-        chi2res_npz -- filepath for npz file which will contain the chi2.ndf and residuals
+        pcoeffs_npz -- filepath for npz file of the polynomial coefficients
+        chi2res_npz -- filepath for npz file of chi2.ndf and residuals
         Optional Keyword Arguments:
-        cov_npz -- filepath for npz file which will contain the covariance matrix
+        cov_npz -- filepath for npz file of covariance matrix
         input_h5 -- the name of an h5 file with MC run results
         order -- the order of polynomial to fit each bin with
         """
@@ -69,20 +73,49 @@ class Polyfit:
                     cov = np.linalg.inv(VM.T@VM)
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
                     self.cov[bin_id] = cov*fac
-            np.savez(pcoeffs_npz, **self.pcoeffs)
-            chi2res = {b: np.array([self.chi2[b], self.res[b]]) for b in self.chi2.keys()}
-            np.savez(chi2res_npz, **chi2res)
-            if 'cov_npz' in kwargs.keys(): np.savez(kwargs['cov_npz'], **self.cov)
+            if 'cov_npz' in kwargs.keys(): self.save(pcoeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
+            else: self.save(pcoeffs_npz, chi2res_npz)
 
-        #loads from json file into class variables
         elif len(kwargs) == 0 or ('cov_npz' in kwargs.keys() and len(kwargs) == 1):
-            self.pcoeffs = np.load(pcoeffs_npz, allow_pickle=True)
-            chi2res = np.load(chi2res_npz, allow_pickle=True)
-            self.chi2 = {b: chi2res[b][0] for b in chi2res.keys()}
-            self.res = {b: chi2res[b][1] for b in chi2res.keys()}
-            if 'cov_npz' in kwargs.keys(): self.cov = np.load(kwargs['cov_npz'], allow_pickle=True)
+            self.pcoeffs, self.res, self.chi2 = {}, {}, {}
+            if 'cov_npz' in kwargs.keys(): 
+                self.cov = {}
+                self.merge(pcoeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
+            else: 
+                self.merge(pcoeffs_npz, chi2res_npz)
         else:
             print('invalid args given to polyfit')
+
+    def merge(self, pcoeffs_npz, chi2res_npz, **kwargs):
+        """ Merge new data to existing class variables.
+        If new data has any bins with the same keys as old data's bins, it will replace the old data.
+
+        Mandatory arguments:
+        pcoeffs_npz -- filepath for npz file of the polynomial coefficients
+        chi2res_npz -- filepath for npz file of the chi2.ndf and residuals
+        Optional Keyword Arguments:
+        cov_npz -- filepath for npz of the covariance matrix
+        """
+        self.pcoeffs = {**self.pcoeffs, **np.load(pcoeffs_npz, allow_pickle=True)}
+        chi2res = np.load(chi2res_npz, allow_pickle=True)
+        self.chi2 = {**self.chi2, **{b: chi2res[b][0] for b in chi2res.keys()}}
+        self.res = {**self.res, **{b: chi2res[b][1] for b in chi2res.keys()}}
+        if 'cov_npz' in kwargs.keys():
+            self.cov = {**self.cov, **np.load(kwargs['cov_npz'], allow_pickle=True)}
+
+    def save(self, pcoeffs_npz, chi2res_npz, **kwargs):
+        """ Save data to given fileplaths
+
+        Mandatory arguments:
+        pcoeffs_npz -- filepath for npz file of the polynomial coefficients
+        chi2res_npz -- filepath for npz file of the chi2.ndf and residuals
+        Optional Keyword Arguments:
+        cov_npz -- filepath for npz of the covariance matrix
+        """
+        np.savez(pcoeffs_npz, **self.pcoeffs)
+        chi2res = {b: np.array([self.chi2[b], self.res[b]]) for b in self.chi2.keys()}
+        np.savez(chi2res_npz, **chi2res)
+        if 'cov_npz' in kwargs.keys(): np.savez(kwargs['cov_npz'], **self.cov)
 
     def get_XY(self, bin_id):
         # probably temp for testing
@@ -93,8 +126,9 @@ class Polyfit:
 
     def get_surrogate_func(self, bin_id):
         """
+        Takes bin_id, either in format bin_name#bin_number, or int: place of the bin in dict (not recommended)
         Returns a surrogate that does not need pceoffs as an input; just takes x(param values).
-        Returns chi2/ndf of fit and residual(s) along with this function.
+        Returns chi2/ndf of fit, residual(s), and cov if it exists.
         """
         if type(bin_id) is int:
             bin_id = list(self.pcoeffs.keys())[bin_id]
