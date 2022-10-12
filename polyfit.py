@@ -30,16 +30,7 @@ class Polyfit:
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
 
-            f = h5py.File(self.input_h5, "r")
-
-            # old debug code
-            # self.pnames = [str(p) for p in f.get('params').attrs["names"]]
-            # print("parameter names: ", self.pnames)
-
-            # self.observables = np.unique([x.decode().split("#")[0] for x in f.get("index")[:]])
-            # print(len(self.observables), "observables")
-            # print(observables[0:10])
-            # print(f.get("index")[0:10])
+            f = h5py.File(self.input_h5, "r")s
 
             # key bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
