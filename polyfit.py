@@ -30,7 +30,7 @@ class Polyfit:
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
 
-            f = h5py.File(self.input_h5, "r")s
+            f = h5py.File(self.input_h5, "r")
 
             # key bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
@@ -59,13 +59,16 @@ class Polyfit:
                 self.pcoeffs[bin_id] = bin_pcoeffs.tolist()
                 self.res[bin_id] = bin_res
                 self.chi2[bin_id] = bin_chi2/self.numCoeffsPoly(self.dim, self.order) #because it's supposed to be /ndf
+                
                 #polynomialapproximation.fit code
                 if 'cov_npz' in kwargs.keys():
                     cov = np.linalg.inv(VM.T@VM)
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
                     self.cov[bin_id] = cov*fac
-            if 'cov_npz' in kwargs.keys(): self.save(pcoeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
-            else: self.save(pcoeffs_npz, chi2res_npz)
+            if 'cov_npz' in kwargs.keys(): 
+                self.save(pcoeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
+            else: 
+                self.save(pcoeffs_npz, chi2res_npz)
 
         elif len(kwargs) == 0 or ('cov_npz' in kwargs.keys() and len(kwargs) == 1):
             self.pcoeffs, self.res, self.chi2 = {}, {}, {}
