@@ -6,7 +6,6 @@ from jax.config import config
 config.update("jax_enable_x64", True)
 config.update('jax_platform_name', 'cpu')
 from functools import partial
-import json
 
 class Polyfit:
     def __init__(self, pcoeffs_npz, chi2res_npz, **kwargs):
@@ -46,15 +45,15 @@ class Polyfit:
             for bin_id in bin_ids:
                 bin_id = bin_id.replace('/', '')
                 bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
-                X = np.array(f['params'][:], dtype=np.float64)
-                Y = np.array(f['values'][self.index[bin_name][int(bin_number)]])
+                X = jnp.array(f['params'][:], dtype=jnp.float64)
+                Y = jnp.array(f['values'][self.index[bin_name][int(bin_number)]])
                 VM = self.vandermonde_jax(X, self.order)
 
                 #polynomialapproximation.coeffsolve2 code
-                bin_pcoeffs, bin_res, rank, s  = np.linalg.lstsq(VM, Y, rcond=None)
+                bin_pcoeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, Y, rcond=None)
 
                 surrogate_Y = self.surrogate(X, bin_pcoeffs)
-                bin_chi2 = np.sum(np.divide(np.power((Y - surrogate_Y), 2), surrogate_Y))
+                bin_chi2 = jnp.sum(jnp.divide(jnp.power((Y - surrogate_Y), 2), surrogate_Y))
 
                 self.pcoeffs[bin_id] = bin_pcoeffs.tolist()
                 self.res[bin_id] = bin_res
@@ -91,11 +90,11 @@ class Polyfit:
         cov_npz -- filepath for npz of the covariance matrix
         """
         self.pcoeffs = {**self.pcoeffs, **np.load(pcoeffs_npz, allow_pickle=True)}
-        chi2res = np.load(chi2res_npz, allow_pickle=True)
+        chi2res = jnp.load(chi2res_npz, allow_pickle=True)
         self.chi2 = {**self.chi2, **{b: chi2res[b][0] for b in chi2res.keys()}}
         self.res = {**self.res, **{b: chi2res[b][1] for b in chi2res.keys()}}
         if 'cov_npz' in kwargs.keys():
-            self.cov = {**self.cov, **np.load(kwargs['cov_npz'], allow_pickle=True)}
+            self.cov = {**self.cov, **jnp.load(kwargs['cov_npz'], allow_pickle=True)}
 
     def save(self, pcoeffs_npz, chi2res_npz, **kwargs):
         """ Save data to given fileplaths
@@ -106,9 +105,9 @@ class Polyfit:
         Optional Keyword Arguments:
         cov_npz -- filepath for npz of the covariance matrix
         """
-        np.savez(pcoeffs_npz, **self.pcoeffs)
+        jnp.savez(pcoeffs_npz, **self.pcoeffs)
         chi2res = {b: np.array([self.chi2[b], self.res[b]]) for b in self.chi2.keys()}
-        np.savez(chi2res_npz, **chi2res)
+        jnp.savez(chi2res_npz, **chi2res)
         if 'cov_npz' in kwargs.keys(): np.savez(kwargs['cov_npz'], **self.cov)
 
     def get_XY(self, bin_id):
@@ -116,7 +115,7 @@ class Polyfit:
         f = h5py.File(self.input_h5, "r")
         bin_id = bin_id.replace('/', '')
         bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
-        return np.array(f['params'][:], dtype=np.float64),np.array(f['values'][self.index[bin_name][int(bin_number)]])
+        return jnp.array(f['params'][:], dtype=jnp.float64), jnp.array(f['values'][self.index[bin_name][int(bin_number)]])
 
     def get_surrogate_func(self, bin_id):
         """
@@ -138,7 +137,8 @@ class Polyfit:
         """
         x = np.array(x)
         dim = x.shape[-1]
-        term_powers = dim*[0]
+        #has to be mutable the way this is written
+        term_powers = np.zeros(dim)
         pvalues = []
         last_axis = None if len(x.shape) == 1 else len(x.shape)-1
         for pcoeff in pcoeffs:
