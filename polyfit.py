@@ -89,7 +89,7 @@ class Polyfit:
         Optional Keyword Arguments:
         cov_npz -- filepath for npz of the covariance matrix
         """
-        self.pcoeffs = {**self.pcoeffs, **np.load(pcoeffs_npz, allow_pickle=True)}
+        self.pcoeffs = {**self.pcoeffs, **dict(jnp.load(pcoeffs_npz, allow_pickle=True))}
         chi2res = jnp.load(chi2res_npz, allow_pickle=True)
         self.chi2 = {**self.chi2, **{b: chi2res[b][0] for b in chi2res.keys()}}
         self.res = {**self.res, **{b: chi2res[b][1] for b in chi2res.keys()}}
