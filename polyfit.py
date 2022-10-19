@@ -8,16 +8,16 @@ config.update('jax_platform_name', 'cpu')
 from functools import partial
 
 class Polyfit:
-    def __init__(self, pcoeffs_npz, chi2res_npz, **kwargs):
+    def __init__(self, p_coeffs_npz, chi2res_npz, **kwargs):
         """ 
         If 'input_h5' are 'order' are given, fit polynomials of order order to each bin in input_h5,
-        then store them in npz files(pcoeffs_npz, chi2res_npz, cov_npz(if given))
-        If 'input_h5' and 'order' are not given, it assumes pcoeffs_npz, chi2res_npz
+        then store them in npz files(p_coeffs_npz, chi2res_npz, cov_npz(if given))
+        If 'input_h5' and 'order' are not given, it assumes p_coeffs_npz, chi2res_npz
         store fits from a previous polyfit instance
         The pceoff, chi2res dicts have the binids as keys with leading '\' characters stripped.
 
         Mandatory arguments:
-        pcoeffs_npz -- filepath for npz file of the polynomial coefficients
+        p_coeffs_npz -- filepath for npz file of the polynomial coefficients
         chi2res_npz -- filepath for npz file of chi2.ndf and residuals
         Optional Keyword Arguments:
         cov_npz -- filepath for npz file of covariance matrix
@@ -38,7 +38,7 @@ class Polyfit:
             [self.index.setdefault(bin.replace('/', '').split('#')[0], []).append(i) for i,bin in enumerate(bin_ids)]
             self.dim = len(f['params'][0])
 
-            self.pcoeffs = {}
+            self.p_coeffs = {}
             self.res = {}
             self.chi2 = {}
             if 'cov_npz' in kwargs.keys(): self.cov = {}
@@ -50,12 +50,12 @@ class Polyfit:
                 VM = self.vandermonde_jax(X, self.order)
 
                 #polynomialapproximation.coeffsolve2 code
-                bin_pcoeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, Y, rcond=None)
+                bin_p_coeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, Y, rcond=None)
 
-                surrogate_Y = self.surrogate(X, bin_pcoeffs)
+                surrogate_Y = self.surrogate(X, bin_p_coeffs)
                 bin_chi2 = jnp.sum(jnp.divide(jnp.power((Y - surrogate_Y), 2), surrogate_Y))
 
-                self.pcoeffs[bin_id] = bin_pcoeffs.tolist()
+                self.p_coeffs[bin_id] = bin_p_coeffs.tolist()
                 self.res[bin_id] = bin_res
                 self.chi2[bin_id] = bin_chi2/self.numCoeffsPoly(self.dim, self.order) #because it's supposed to be /ndf
                 
@@ -65,47 +65,47 @@ class Polyfit:
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
                     self.cov[bin_id] = cov*fac
             if 'cov_npz' in kwargs.keys(): 
-                self.save(pcoeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
+                self.save(p_coeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
             else: 
-                self.save(pcoeffs_npz, chi2res_npz)
+                self.save(p_coeffs_npz, chi2res_npz)
 
         elif len(kwargs) == 0 or ('cov_npz' in kwargs.keys() and len(kwargs) == 1):
-            self.pcoeffs, self.res, self.chi2 = {}, {}, {}
+            self.p_coeffs, self.res, self.chi2 = {}, {}, {}
             if 'cov_npz' in kwargs.keys(): 
                 self.cov = {}
-                self.merge(pcoeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
+                self.merge(p_coeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
             else: 
-                self.merge(pcoeffs_npz, chi2res_npz)
+                self.merge(p_coeffs_npz, chi2res_npz)
         else:
             print('invalid args given to polyfit')
 
-    def merge(self, pcoeffs_npz, chi2res_npz, **kwargs):
+    def merge(self, p_coeffs_npz, chi2res_npz, **kwargs):
         """ Merge new data to existing class variables.
         If new data has any bins with the same keys as old data's bins, it will replace the old data.
 
         Mandatory arguments:
-        pcoeffs_npz -- filepath for npz file of the polynomial coefficients
+        p_coeffs_npz -- filepath for npz file of the polynomial coefficients
         chi2res_npz -- filepath for npz file of the chi2.ndf and residuals
         Optional Keyword Arguments:
         cov_npz -- filepath for npz of the covariance matrix
         """
-        self.pcoeffs = {**self.pcoeffs, **dict(jnp.load(pcoeffs_npz, allow_pickle=True))}
+        self.p_coeffs = {**self.p_coeffs, **dict(jnp.load(p_coeffs_npz, allow_pickle=True))}
         chi2res = jnp.load(chi2res_npz, allow_pickle=True)
         self.chi2 = {**self.chi2, **{b: chi2res[b][0] for b in chi2res.keys()}}
         self.res = {**self.res, **{b: chi2res[b][1] for b in chi2res.keys()}}
         if 'cov_npz' in kwargs.keys():
             self.cov = {**self.cov, **jnp.load(kwargs['cov_npz'], allow_pickle=True)}
 
-    def save(self, pcoeffs_npz, chi2res_npz, **kwargs):
+    def save(self, p_coeffs_npz, chi2res_npz, **kwargs):
         """ Save data to given fileplaths
 
         Mandatory arguments:
-        pcoeffs_npz -- filepath for npz file of the polynomial coefficients
+        p_coeffs_npz -- filepath for npz file of the polynomial coefficients
         chi2res_npz -- filepath for npz file of the chi2.ndf and residuals
         Optional Keyword Arguments:
         cov_npz -- filepath for npz of the covariance matrix
         """
-        jnp.savez(pcoeffs_npz, **self.pcoeffs)
+        jnp.savez(p_coeffs_npz, **self.p_coeffs)
         chi2res = {b: np.array([self.chi2[b], self.res[b]]) for b in self.chi2.keys()}
         jnp.savez(chi2res_npz, **chi2res)
         if 'cov_npz' in kwargs.keys(): np.savez(kwargs['cov_npz'], **self.cov)
@@ -124,13 +124,13 @@ class Polyfit:
         Returns chi2/ndf of fit, residual(s), and cov if it exists.
         """
         if type(bin_id) is int:
-            bin_id = list(self.pcoeffs.keys())[bin_id]
+            bin_id = list(self.p_coeffs.keys())[bin_id]
         else:
             bin_id = bin_id.replace('/', '')
-        return partial(self.surrogate, pcoeffs = self.pcoeffs[bin_id]), self.chi2[bin_id], self.res[bin_id], \
+        return partial(self.surrogate, p_coeffs = self.p_coeffs[bin_id]), self.chi2[bin_id], self.res[bin_id], \
             self.cov[bin_id] if hasattr(self, 'cov') else None
     
-    def surrogate(self, x, pcoeffs):
+    def surrogate(self, x, p_coeffs):
         """
         Takes a list/array of param sets, and returns the surrogate's estimate for their nominal values.
         The length of the highest dimension of the list/array is the number of params.
@@ -141,7 +141,7 @@ class Polyfit:
         term_powers = np.zeros(dim)
         pvalues = []
         last_axis = None if len(x.shape) == 1 else len(x.shape)-1
-        for pcoeff in pcoeffs:
+        for pcoeff in p_coeffs:
             #appending the value of the term for each param set given
             pvalues.append(pcoeff*np.prod(x**term_powers, axis = last_axis))
             term_powers = self.mono_next_grlex(dim, term_powers)

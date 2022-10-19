@@ -5,20 +5,18 @@ import matplotlib.pyplot as plt
 from jax import jacfwd, jacrev
 from polyfit import Polyfit
 import json
-
 class Paramtune:
-    def __init__(self, target_json, initial_guess, pcoeffs_npz, chi2res_npz, **kwargs):
+    def __init__(self, target_json, initial_guess, p_coeffs_npz, chi2res_npz, **kwargs):
+        self.fits = Polyfit(p_coeffs_npz, chi2res_npz, **kwargs)
         with open(target_json, 'r') as f:
             target_data = json.loads(f.read())
         target_values = {k: target_data[k][0] for k in target_data}
         target_error = {k: target_data[k][1] for k in target_data}
-
-        mc_fits = Polyfit(pcoeffs_npz, chi2res_npz, **kwargs)
+        
         args = (list(target_values.values()), list(target_error.values()),
-                list(mc_fits.pcoeffs.values()), list(mc_fits.cov.values()))
-        print(jnp.array(list(mc_fits.pcoeffs.values())).shape)
+                list(self.fits.p_coeffs.values()), list(self.fits.cov.values()))
         p_opt = opt.minimize(self.objective_func, initial_guess, args = args, method='Nelder-Mead')
-        print(p_opt)
+        print(p_opt.x)
 
     def objective_func(self, p, d, d_sig, coeff, cov):
         sum_over = 0
