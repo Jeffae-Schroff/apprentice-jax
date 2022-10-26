@@ -31,11 +31,15 @@ class Polyfit:
 
             f = h5py.File(self.input_h5, "r")
 
-            # key bin names to the array indexes in f.get(index) with binids matching that bin name
-            self.index = {}
-            bin_ids = [x.decode() for x in f.get("index")[:]]
+            # strip '/' off for filename usability in npz
+            bin_ids = [x.decode().replace('/', '') for x in f.get("index")[:]]
+            # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
+            index = {}
             # If key not in index yet, start a new list as its value. Append i to key's value. Strip '/' for valid filenames
-            [self.index.setdefault(bin.replace('/', '').split('#')[0], []).append(i) for i,bin in enumerate(bin_ids)]
+            [index.setdefault(bin.replace('/', '').split('#')[0], []).append(count) for count,bin in enumerate(bin_ids)]   
+            
+            # index observables(bin_names) to bin_ids
+            self.obs_index = {obs_name:[bin_ids[i] for i in index[obs_name]] for obs_name in index.keys()}
             self.dim = len(f['params'][0])
 
             self.p_coeffs = {}
@@ -43,10 +47,10 @@ class Polyfit:
             self.chi2 = {}
             if 'cov_npz' in kwargs.keys(): self.cov = {}
             for bin_id in bin_ids:
-                bin_id = bin_id.replace('/', '')
                 bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
                 X = jnp.array(f['params'][:], dtype=jnp.float64)
-                Y = jnp.array(f['values'][self.index[bin_name][int(bin_number)]])
+                # As far as I can tell, we need index and self.obs_index because of how f['values'] is structured
+                Y = jnp.array(f['values'][index[bin_name][int(bin_number)]])
                 VM = self.vandermonde_jax(X, self.order)
 
                 #polynomialapproximation.coeffsolve2 code
@@ -56,7 +60,7 @@ class Polyfit:
                 bin_chi2 = jnp.sum(jnp.divide(jnp.power((Y - surrogate_Y), 2), surrogate_Y))
 
                 self.p_coeffs[bin_id] = bin_p_coeffs.tolist()
-                self.res[bin_id] = bin_res
+                self.res[bin_id] = bin_res[0] #bin_res comes out of lstsq as a list
                 self.chi2[bin_id] = bin_chi2/self.numCoeffsPoly(self.dim, self.order) #because it's supposed to be /ndf
                 
                 #polynomialapproximation.fit code
@@ -70,7 +74,7 @@ class Polyfit:
                 self.save(p_coeffs_npz, chi2res_npz)
 
         elif len(kwargs) == 0 or ('cov_npz' in kwargs.keys() and len(kwargs) == 1):
-            self.p_coeffs, self.res, self.chi2 = {}, {}, {}
+            self.p_coeffs, self.res, self.chi2, self.obs_index = {}, {}, {}, {}
             if 'cov_npz' in kwargs.keys(): 
                 self.cov = {}
                 self.merge(p_coeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
@@ -95,6 +99,9 @@ class Polyfit:
         self.res = {**self.res, **{b: chi2res[b][1] for b in chi2res.keys()}}
         if 'cov_npz' in kwargs.keys():
             self.cov = {**self.cov, **jnp.load(kwargs['cov_npz'], allow_pickle=True)}
+        new_obs_index = {}
+        [new_obs_index.setdefault(bin.replace('/', '').split('#')[0], []).append(bin) for bin in self.p_coeffs.keys()]
+        self.obs_index = {**self.obs_index, **new_obs_index}
 
     def save(self, p_coeffs_npz, chi2res_npz, **kwargs):
         """ Save data to given fileplaths
