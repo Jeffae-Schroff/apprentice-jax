@@ -8,19 +8,34 @@ import json
 class Paramtune:
     def __init__(self, target_json, initial_guess, p_coeffs_npz, chi2res_npz, **kwargs):
         self.fits = Polyfit(p_coeffs_npz, chi2res_npz, **kwargs)
+
         with open(target_json, 'r') as f:
             target_data = json.loads(f.read())
-        target_values = {k: target_data[k][0] for k in target_data}
-        target_error = {k: target_data[k][1] for k in target_data}
+        self.target_values = {k.replace('/', ''): target_data[k][0] for k in target_data}
+        self.target_error = {k.replace('/', ''): target_data[k][1] for k in target_data}
         
-        args = (list(target_values.values()), list(target_error.values()),
+        args = (list(self.target_values.values()), list(self.target_error.values()),
                 list(self.fits.p_coeffs.values()), list(self.fits.cov.values()))
-        p_opt = opt.minimize(self.objective_func, initial_guess, args = args, method='Nelder-Mead')
-        print(p_opt.x)
+        self.p_opt = opt.minimize(self.objective_func, initial_guess, args = args, method='Nelder-Mead')
+        print(self.p_opt.x)
 
-    def objective_func(self, p, d, d_sig, coeff, cov):
+    def graph(self, obs_name, graph_file):
+        bin_ids = self.fits.obs_index[obs_name]
+        poly_opt = timing_van_jax([self.p_opt.x], 3)[0]
+        tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in bin_ids]), poly_opt.T)
+        
+        plt.figure()
+        plt.title(obs_name)
+        plt.ylabel("Number of Events")
+        plt.xlabel("bin_numbers (x values currently not recorded)")
+        edges = range(len(self.fits.obs_index[obs_name]) + 1)
+        plt.stairs([self.target_values[b] for b in bin_ids], edges, label = 'Target')
+        plt.stairs(tuned_y, edges, label = 'Tuned')
+        plt.savefig(graph_file)
+
+    def objective_func(self, params, d, d_sig, coeff, cov):
         sum_over = 0
-        poly = timing_van_jax([p], 3)[0]
+        poly = timing_van_jax([params], 3)[0]
 
         #Loop over the bins
         for i in range(jnp.size(jnp.array(coeff), axis=0)):
