@@ -2,10 +2,10 @@ import h5py
 import numpy as np
 import jax.numpy as jnp
 from jax.config import config
-
 config.update("jax_enable_x64", True)
 config.update('jax_platform_name', 'cpu')
 from functools import partial
+
 
 class Polyfit:
     def __init__(self, p_coeffs_npz, chi2res_npz, **kwargs):
@@ -20,6 +20,7 @@ class Polyfit:
         p_coeffs_npz -- filepath for npz file of the polynomial coefficients
         chi2res_npz -- filepath for npz file of chi2.ndf and residuals
         Optional Keyword Arguments:
+        obs_sample: use the first <obs_sample> observables in h5.
         cov_npz -- filepath for npz file of covariance matrix
         input_h5 -- the name of an h5 file with MC run results
         order -- the order of polynomial to fit each bin with
@@ -31,15 +32,21 @@ class Polyfit:
 
             f = h5py.File(self.input_h5, "r")
 
-            # strip '/' off for filename usability in npz
-            bin_ids = [x.decode().replace('/', '') for x in f.get("index")[:]]
+            #Strip '/' for valid filenames
+            bin_ids = [x.decode() for x in f.get("index")[:]]
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             index = {}
-            # If key not in index yet, start a new list as its value. Append i to key's value. Strip '/' for valid filenames
-            [index.setdefault(bin.replace('/', '').split('#')[0], []).append(count) for count,bin in enumerate(bin_ids)]   
-            
+            # If key not in index yet, start a new list as its value. Append i to key's value. 
+            [index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(bin_ids)]
+            if ('obs_sample' in kwargs.keys()):
+                sample_index = {}
+                for (i, obs) in zip(range(kwargs['obs_sample']), index.keys()):
+                    sample_index[obs] = index[obs]
+                index = sample_index
+            print(list(index.keys()))
+
             # index observables(bin_names) to bin_ids
-            self.obs_index = {obs_name:[bin_ids[i] for i in index[obs_name]] for obs_name in index.keys()}
+            self.obs_index = {obs_name.replace('/', ''):[bin_ids[i] for i in index[obs_name]] for obs_name in index.keys()}
             self.dim = len(f['params'][0])
 
             self.p_coeffs = {}
@@ -48,6 +55,9 @@ class Polyfit:
             if 'cov_npz' in kwargs.keys(): self.cov = {}
             for bin_id in bin_ids:
                 bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
+                if not bin_name in index.keys():
+                    break
+                print("fitting", bin_id)
                 X = jnp.array(f['params'][:], dtype=jnp.float64)
                 # As far as I can tell, we need index and self.obs_index because of how f['values'] is structured
                 Y = jnp.array(f['values'][index[bin_name][int(bin_number)]])
@@ -59,6 +69,8 @@ class Polyfit:
                 surrogate_Y = self.surrogate(X, bin_p_coeffs)
                 bin_chi2 = jnp.sum(jnp.divide(jnp.power((Y - surrogate_Y), 2), surrogate_Y))
 
+                #Strip / from bin_id now that it will be an filename in npz
+                bin_id = bin_id.replace('/', '')
                 self.p_coeffs[bin_id] = bin_p_coeffs.tolist()
                 self.res[bin_id] = bin_res[0] #bin_res comes out of lstsq as a list
                 self.chi2[bin_id] = bin_chi2/self.numCoeffsPoly(self.dim, self.order) #because it's supposed to be /ndf

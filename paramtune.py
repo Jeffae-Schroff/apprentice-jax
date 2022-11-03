@@ -2,22 +2,27 @@ import jax.numpy as jnp
 from timing import timing_van_jax
 import scipy.optimize as opt
 import matplotlib.pyplot as plt
-from jax import jacfwd, jacrev
 from polyfit import Polyfit
 import json
 class Paramtune:
-    def __init__(self, target_json, initial_guess, p_coeffs_npz, chi2res_npz, **kwargs):
+    def __init__(self, target_json, initial_guess, obs_sample, p_coeffs_npz, chi2res_npz, **kwargs):
         self.fits = Polyfit(p_coeffs_npz, chi2res_npz, **kwargs)
 
         with open(target_json, 'r') as f:
             target_data = json.loads(f.read())
         self.target_values = {k.replace('/', ''): target_data[k][0] for k in target_data}
         self.target_error = {k.replace('/', ''): target_data[k][1] for k in target_data}
+        if not obs_sample == None:
+            self.target_values = {k:self.target_values[k] for k in list(self.target_values.keys())[:obs_sample]}
+            self.target_error = {k:self.target_error[k] for k in list(self.target_error.keys())[:obs_sample]}
         
-        args = (list(self.target_values.values()), list(self.target_error.values()),
-                list(self.fits.p_coeffs.values()), list(self.fits.cov.values()))
-        self.p_opt = opt.minimize(self.objective_func, initial_guess, args = args, method='Nelder-Mead')
-        print(self.p_opt.x)
+        args = (list(self.target_values.values()), list(self.target_error.values()), list(self.fits.p_coeffs.values()))
+        if not ('cov_npz' in kwargs.keys()):
+            self.p_opt = opt.minimize(self.objective_func_no_err, initial_guess, args = args, method='Nelder-Mead')
+        else:
+            args = args + (list(self.fits.cov.values()))
+            self.p_opt = opt.minimize(self.objective_func, initial_guess, args = args, method='Nelder-Mead')
+        print("Tuned Parameters: ", self.p_opt.x)
 
     def graph(self, obs_name, graph_file):
         bin_ids = self.fits.obs_index[obs_name]
@@ -28,7 +33,10 @@ class Paramtune:
         plt.title(obs_name)
         plt.ylabel("Number of Events")
         plt.xlabel("bin_numbers (x values currently not recorded)")
-        edges = range(len(self.fits.obs_index[obs_name]) + 1)
+        num_bins = len(self.fits.obs_index[obs_name])
+        num_ticks = 7
+        plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
+        edges = range(num_bins + 1)
         plt.stairs([self.target_values[b] for b in bin_ids], edges, label = 'Target')
         plt.stairs(tuned_y, edges, label = 'Tuned')
         plt.savefig(graph_file)
