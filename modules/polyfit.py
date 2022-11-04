@@ -32,8 +32,6 @@ class Polyfit:
             self.order = kwargs['order']
 
             f = h5py.File(self.input_h5, "r")
-
-            #Strip '/' for valid filenames
             bin_ids = [x.decode() for x in f.get("index")[:]]
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             index = {}
@@ -44,11 +42,12 @@ class Polyfit:
                 for (i, obs) in zip(range(kwargs['obs_sample']), index.keys()):
                     sample_index[obs] = index[obs]
                 index = sample_index
-            print(list(index.keys()))
+            
 
-            # index observables(bin_names) to bin_ids
+            # index observables(bin_names) to bin_ids, also strip their '/'. Our code will use these names from here on.
             self.obs_index = {obs_name.replace('/', ''):[bin_ids[i] for i in index[obs_name]] for obs_name in index.keys()}
             self.dim = len(f['params'][0])
+            print("observable nanes: ", list(index.keys()))
 
             self.p_coeffs = {}
             self.res = {}
@@ -61,15 +60,15 @@ class Polyfit:
                 if not bin_name in index.keys():
                     break
 
-                X = jnp.array(f['params'][:], dtype=jnp.float64)
+                bin_X = jnp.array(f['params'][:], dtype=jnp.float64)
                 # As far as I can tell, we need index and self.obs_index because of how f['values'] is structured
-                Y = jnp.array(f['values'][index[bin_name][int(bin_number)]])
+                bin_Y = jnp.array(f['values'][index[bin_name][int(bin_number)]])
                 
                 #polynomialapproximation.coeffsolve2 code
-                bin_p_coeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, Y, rcond=None)
+                bin_p_coeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, bin_Y, rcond=None)
 
-                surrogate_Y = self.surrogate(X, bin_p_coeffs)
-                bin_chi2 = jnp.sum(jnp.divide(jnp.power((Y - surrogate_Y), 2), surrogate_Y))
+                surrogate_Y = self.surrogate(bin_X, bin_p_coeffs)
+                bin_chi2 = jnp.sum(jnp.divide(jnp.power((bin_Y - surrogate_Y), 2), surrogate_Y))
 
                 #Strip / from bin_id now that it will be an filename in npz
                 bin_id = bin_id.replace('/', '')

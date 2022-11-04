@@ -5,42 +5,52 @@ import matplotlib.pyplot as plt
 from modules.polyfit import Polyfit
 import json
 class Paramtune:
-    def __init__(self, target_json, initial_guess, obs_sample, p_coeffs_npz, chi2res_npz, **kwargs):
+    def __init__(self, target_json, p_coeffs_npz, chi2res_npz, obs_sample = None, initial_guess = None, **kwargs):
         self.fits = Polyfit(p_coeffs_npz, chi2res_npz, **kwargs)
-
+        
+        # Read in target data
         with open(target_json, 'r') as f:
             target_data = json.loads(f.read())
+        # stripping '/' again to match polyfit
         self.target_values = {k.replace('/', ''): target_data[k][0] for k in target_data}
         self.target_error = {k.replace('/', ''): target_data[k][1] for k in target_data}
-        if not obs_sample == None:
+        if not obs_sample is None:
             self.target_values = {k:self.target_values[k] for k in list(self.target_values.keys())[:obs_sample]}
             self.target_error = {k:self.target_error[k] for k in list(self.target_error.keys())[:obs_sample]}
         
         args = (list(self.target_values.values()), list(self.target_error.values()), list(self.fits.p_coeffs.values()))
-        if not ('cov_npz' in kwargs.keys()):
-            self.p_opt = opt.minimize(self.objective_func_no_err, initial_guess, args = args, method='Nelder-Mead')
-        else:
+        if ('cov_npz' in kwargs.keys()):
             args = args + (list(self.fits.cov.values()),)
-            self.p_opt = opt.minimize(self.objective_func, initial_guess, args = args, method='Nelder-Mead')
+            self.objective = self.objective_func
+        else:
+            self.objective = self.objective_func_no_err
+        self.p_opt = opt.minimize(self.objective, initial_guess, args = args, method='Nelder-Mead')
         print("Tuned Parameters: ", self.p_opt.x)
 
-    def graph(self, obs_name, graph_file = None):
+    def graph_tune(self, obs_name, graph_file = None):
         bin_ids = self.fits.obs_index[obs_name]
         poly_opt = timing_van_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in bin_ids]), poly_opt.T)
         
         plt.figure()
-        plt.title(obs_name)
-        plt.ylabel("Number of Events")
-        plt.xlabel("bin_numbers (x values currently not recorded)")
+        plt.title("Placeholder")
+        #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
+        plt.ylabel("Placeholder")
+        plt.xlabel(obs_name + " bins")
         num_bins = len(self.fits.obs_index[obs_name])
         num_ticks = 7
         plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
         edges = range(num_bins + 1)
-        plt.stairs([self.target_values[b] for b in bin_ids], edges, label = 'Target')
-        plt.stairs(tuned_y, edges, label = 'Tuned')
+        plt.stairs([self.target_values[b] for b in bin_ids], edges, label = 'Target Data')
+        plt.stairs(tuned_y, edges, label = 'Surrogate(Tuned Parameters)')
+        
+        plt.legend()
         if not graph_file == None:
             plt.savefig(graph_file)
+
+    def graph_contour(self, obs_name):
+        bin_ids = self.fits.obs_index[obs_name]
+        #temp
 
     def objective_func(self, params, d, d_sig, coeff, cov):
         sum_over = 0
