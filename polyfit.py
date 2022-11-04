@@ -1,5 +1,6 @@
 import h5py
 import numpy as np
+import jax
 import jax.numpy as jnp
 from jax.config import config
 config.update("jax_enable_x64", True)
@@ -53,6 +54,8 @@ class Polyfit:
             self.res = {}
             self.chi2 = {}
             if 'cov_npz' in kwargs.keys(): self.cov = {}
+            X = jnp.array(f['params'][:], dtype=jnp.float64)
+            VM = self.vandermonde_jax(X, self.order)
             for bin_id in bin_ids:
                 bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
                 if not bin_name in index.keys():
@@ -61,8 +64,7 @@ class Polyfit:
                 X = jnp.array(f['params'][:], dtype=jnp.float64)
                 # As far as I can tell, we need index and self.obs_index because of how f['values'] is structured
                 Y = jnp.array(f['values'][index[bin_name][int(bin_number)]])
-                VM = self.vandermonde_jax(X, self.order)
-
+                
                 #polynomialapproximation.coeffsolve2 code
                 bin_p_coeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, Y, rcond=None)
 
@@ -75,11 +77,23 @@ class Polyfit:
                 self.res[bin_id] = bin_res[0] #bin_res comes out of lstsq as a list
                 self.chi2[bin_id] = bin_chi2/self.numCoeffsPoly(self.dim, self.order) #because it's supposed to be /ndf
                 
+                def res_sq(coeff):
+                    return jnp.sum(jnp.square(Y-VM@coeff))
+                def Hessian(func):
+                    return jax.jacfwd(jax.jacrev(res_sq))
+
+
                 #polynomialapproximation.fit code
                 if 'cov_npz' in kwargs.keys():
-                    cov = np.linalg.inv(VM.T@VM)
+                    #cov = np.linalg.inv(VM.T@VM)
+                    cov = jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs))
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
                     self.cov[bin_id] = cov*fac
+                    print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_id])), "\nend")
+                    #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
+                    
+
+
             if 'cov_npz' in kwargs.keys(): 
                 self.save(p_coeffs_npz, chi2res_npz, cov_npz = kwargs['cov_npz'])
             else: 
