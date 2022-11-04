@@ -60,7 +60,7 @@ class Polyfit:
                 bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
                 if not bin_name in index.keys():
                     break
-                print("fitting", bin_id)
+
                 X = jnp.array(f['params'][:], dtype=jnp.float64)
                 # As far as I can tell, we need index and self.obs_index because of how f['values'] is structured
                 Y = jnp.array(f['values'][index[bin_name][int(bin_number)]])

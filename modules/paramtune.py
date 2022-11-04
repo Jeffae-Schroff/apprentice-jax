@@ -2,7 +2,7 @@ import jax.numpy as jnp
 from timing import timing_van_jax
 import scipy.optimize as opt
 import matplotlib.pyplot as plt
-from polyfit import Polyfit
+from modules.polyfit import Polyfit
 import json
 class Paramtune:
     def __init__(self, target_json, initial_guess, obs_sample, p_coeffs_npz, chi2res_npz, **kwargs):
@@ -20,11 +20,11 @@ class Paramtune:
         if not ('cov_npz' in kwargs.keys()):
             self.p_opt = opt.minimize(self.objective_func_no_err, initial_guess, args = args, method='Nelder-Mead')
         else:
-            args = args + (list(self.fits.cov.values()))
+            args = args + (list(self.fits.cov.values()),)
             self.p_opt = opt.minimize(self.objective_func, initial_guess, args = args, method='Nelder-Mead')
         print("Tuned Parameters: ", self.p_opt.x)
 
-    def graph(self, obs_name, graph_file):
+    def graph(self, obs_name, graph_file = None):
         bin_ids = self.fits.obs_index[obs_name]
         poly_opt = timing_van_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in bin_ids]), poly_opt.T)
@@ -39,7 +39,8 @@ class Paramtune:
         edges = range(num_bins + 1)
         plt.stairs([self.target_values[b] for b in bin_ids], edges, label = 'Target')
         plt.stairs(tuned_y, edges, label = 'Tuned')
-        plt.savefig(graph_file)
+        if not graph_file == None:
+            plt.savefig(graph_file)
 
     def objective_func(self, params, d, d_sig, coeff, cov):
         sum_over = 0

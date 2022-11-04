@@ -1,4 +1,4 @@
-from paramtune import Paramtune
+from modules.paramtune import Paramtune
 import argparse
 parser = argparse.ArgumentParser(description="Outer Loop Optimimzation")
 add_arg = parser.add_argument
