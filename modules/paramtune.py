@@ -5,20 +5,18 @@ import matplotlib.pyplot as plt
 from modules.polyfit import Polyfit
 import json
 class Paramtune:
-    def __init__(self, target_json, p_coeffs_npz, chi2res_npz, obs_sample = None, initial_guess = None, **kwargs):
-        self.fits = Polyfit(p_coeffs_npz, chi2res_npz, **kwargs)
+    '''
+    TODO: document
+    '''
+    def __init__(self, npz_file, target_json, obs_sample = None, initial_guess = None, **kwargs):
+        self.fits = Polyfit(npz_file, **kwargs)
         
         # Read in target data
         with open(target_json, 'r') as f:
             target_data = json.loads(f.read())
-        # stripping '/' again to match polyfit
-        self.target_values = {k.replace('/', ''): target_data[k][0] for k in target_data}
-        self.target_error = {k.replace('/', ''): target_data[k][1] for k in target_data}
-        if not obs_sample is None:
-            self.target_values = {k:self.target_values[k] for k in list(self.target_values.keys())[:obs_sample]}
-            self.target_error = {k:self.target_error[k] for k in list(self.target_error.keys())[:obs_sample]}
-        
-        args = (list(self.target_values.values()), list(self.target_error.values()), list(self.fits.p_coeffs.values()))
+        self.target_values = [target_data[k][0] for k in target_data]
+        self.target_error = [target_data[k][1] for k in target_data]
+        args = (self.target_values, self.target_error, self.fits.p_coeffs)
         if ('cov_npz' in kwargs.keys()):
             args = args + (list(self.fits.cov.values()),)
             self.objective = self.objective_func
@@ -28,20 +26,20 @@ class Paramtune:
         print("Tuned Parameters: ", self.p_opt.x)
 
     def graph_tune(self, obs_name, graph_file = None):
-        bin_ids = self.fits.obs_index[obs_name]
+        obs_bin_idns = self.fits.index[obs_name]
         poly_opt = timing_van_jax([self.p_opt.x], 3)[0]
-        tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in bin_ids]), poly_opt.T)
+        tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
         
         plt.figure()
         plt.title("Placeholder")
         #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
         plt.ylabel("Placeholder")
         plt.xlabel(obs_name + " bins")
-        num_bins = len(self.fits.obs_index[obs_name])
+        num_bins = len(self.fits.index[obs_name])
         num_ticks = 7
         plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
         edges = range(num_bins + 1)
-        plt.stairs([self.target_values[b] for b in bin_ids], edges, label = 'Target Data')
+        plt.stairs([self.target_values[b] for b in obs_bin_idns], edges, label = 'Target Data')
         plt.stairs(tuned_y, edges, label = 'Surrogate(Tuned Parameters)')
         
         plt.legend()
