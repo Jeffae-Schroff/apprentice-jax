@@ -22,6 +22,8 @@ class Paramtune:
             self.objective = self.objective_func
         else:
             self.objective = self.objective_func_no_err
+        if initial_guess == None:
+            initial_guess == self.initial_guessl("argmin")
         self.p_opt = opt.minimize(self.objective, initial_guess, args = args, method='Nelder-Mead')
         print("Tuned Parameters: ", self.p_opt.x)
 
@@ -49,6 +51,12 @@ class Paramtune:
     def graph_contour(self, obs_name):
         bin_ids = self.fits.obs_index[obs_name]
         #temp
+    def initial_guess(self, method):
+        #takes guess in param range with smallest objective.
+        if method == 'argmin':
+            print(self.fits.X)
+            # lowest = [min(self.fits[])]
+        return 
 
     def objective_func(self, params, d, d_sig, coeff, cov):
         sum_over = 0

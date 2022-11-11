@@ -70,7 +70,7 @@ class Polyfit:
                 self.chi2ndf.append(bin_chi2/(self.num_coeffs-1)) #because it's supposed to be /ndf
                 
                 def res_sq(coeff):
-                    return jnp.sum(jnp.square(Y-VM@coeff))
+                    return jnp.sum(jnp.square(bin_Y-VM@coeff))
                 def Hessian(func):
                     return jax.jacfwd(jax.jacrev(res_sq))
                 #polynomialapproximation.fit code
@@ -78,8 +78,9 @@ class Polyfit:
                     #cov = np.linalg.inv(VM.T@VM)
                     cov = jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs))
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
-                    self.cov[bin_id] = cov*fac
-                    print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_id])), "\nend")
+                    bin_idn = self.bin_idn(bin_id)
+                    self.cov.append(cov*fac)
+                    print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
                 self.save(npz_file)
 
