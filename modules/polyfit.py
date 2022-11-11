@@ -80,7 +80,7 @@ class Polyfit:
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
                     bin_idn = self.bin_idn(bin_id)
                     self.cov.append(cov*fac)
-                    print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
+                    # print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
                 self.save(npz_file)
 

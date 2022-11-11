@@ -1,3 +1,4 @@
+import jax. random as random
 import jax.numpy as jnp
 from timing import timing_van_jax
 import scipy.optimize as opt
@@ -16,15 +17,16 @@ class Paramtune:
             target_data = json.loads(f.read())
         self.target_values = [target_data[k][0] for k in target_data]
         self.target_error = [target_data[k][1] for k in target_data]
-        args = (self.target_values, self.target_error, self.fits.p_coeffs)
-        if ('cov_npz' in kwargs.keys()):
-            args = args + (list(self.fits.cov.values()),)
+        self.obj_args = (self.target_values, self.target_error, self.fits.p_coeffs)
+        if kwargs['covariance']:
+            self.obj_args = self.obj_args + (self.fits.cov,)
             self.objective = self.objective_func
         else:
             self.objective = self.objective_func_no_err
-        if initial_guess == None:
-            initial_guess == self.initial_guessl("argmin")
-        self.p_opt = opt.minimize(self.objective, initial_guess, args = args, method='Nelder-Mead')
+        if type(initial_guess) == str:
+            initial_guess = self.calculate_initial(initial_guess)
+            print("Calculated inital guess: ", initial_guess) 
+        self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='Nelder-Mead')
         print("Tuned Parameters: ", self.p_opt.x)
 
     def graph_tune(self, obs_name, graph_file = None):
@@ -51,12 +53,21 @@ class Paramtune:
     def graph_contour(self, obs_name):
         bin_ids = self.fits.obs_index[obs_name]
         #temp
-    def initial_guess(self, method):
+
+    def calculate_initial(self, method):
         #takes guess in param range with smallest objective.
-        if method == 'argmin':
-            print(self.fits.X)
-            # lowest = [min(self.fits[])]
-        return 
+        if method == 'sample_range':
+            num_samples = 50
+            samples = random.uniform(random.PRNGKey(2403), (num_samples,2),\
+                minval = self.fits.X.min(axis = 0), maxval = self.fits.X.max(axis = 0), dtype=jnp.float64)
+            objective = jnp.apply_along_axis(self.objective, 1, samples, *self.obj_args)
+            return samples[jnp.argmin(objective)]
+        elif method == 'mc_runs':
+            objective = jnp.apply_along_axis(self.objective, 1, self.fits.X, *self.obj_args)
+            return self.fits.X[jnp.argmin(objective)]
+        else:
+            print("initial guess calulation method invalid")
+
 
     def objective_func(self, params, d, d_sig, coeff, cov):
         sum_over = 0
