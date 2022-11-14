@@ -10,7 +10,6 @@ def timing_van_jax(params, order):
     except:
         dim = 1
     params = jnp.array(params)
-
     #We will take params to the power of grlex_pow element-wise
     if dim == 1:
         grlex_pow = jnp.array(range(order+1))
