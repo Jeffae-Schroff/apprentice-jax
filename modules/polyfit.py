@@ -25,7 +25,7 @@ class Polyfit:
         order -- the order of polynomial to fit each bin with
         """
 
-        if len(kwargs) == 3 and 'input_h5'  and 'order' and 'covariance' in kwargs.keys():
+        if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
 
@@ -44,7 +44,6 @@ class Polyfit:
             self.obs_index = {}
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name.split('[')[0], []) for bin_name in self.index.keys()]
-            print("Fitting observables: ", list(self.obs_index.keys()))
 
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             self.cov = [] if kwargs['covariance'] else None 
@@ -55,7 +54,15 @@ class Polyfit:
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
             #TODO: make uncertainty symmetric if we can't do asymmetric
+            bin_count = 0
+            
+            print("Fitting bins: ")
+
             for bin_id in self.bin_ids:
+                bin_count += 1
+                if 'num_bins' in kwargs.keys() and bin_count > kwargs['num_bins']:
+                    break
+                print(bin_id, end = ', ')
                 bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
                 bin_Y = jnp.array(f['values'][self.index[bin_name][int(bin_number)]])
                 
@@ -82,9 +89,10 @@ class Polyfit:
                     self.cov.append(cov*fac)
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
-                self.save(npz_file)
+            self.save(npz_file)
+            print(" inner loop done!")
 
-        elif len(kwargs) == 1 and 'covariance' in kwargs.keys():
+        elif 'covariance' in kwargs.keys():
             self.p_coeffs, self.res, self.chi2ndf, self.bin_ids, self.X, self.Y\
                 = np.empty(0),np.empty(0),np.empty(0),np.empty(0),np.empty(0),np.empty(0)
             self.cov = [] if kwargs['covariance'] else None 
