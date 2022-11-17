@@ -1,4 +1,5 @@
-import jax. random as random
+import jax.random as random
+import jax
 import jax.numpy as jnp
 from timing import timing_van_jax
 import scipy.optimize as opt
@@ -37,6 +38,19 @@ class Paramtune:
             print("Calculated inital guess: ", initial_guess) 
         self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='Nelder-Mead')
         print("Tuned Parameters: ", self.p_opt.x)
+
+        #Calculating covariance of parameters by means of inverse Hessian
+        def res_sq(param):
+            return jnp.sum(jnp.square(self.fits.p_coeffs@timing_van_jax([param], self.fits.order)[0] - jnp.array(self.target_values)))
+        def Hessian(func):
+            return jax.jacfwd(jax.jacrev(res_sq))
+        cov = jnp.linalg.inv(Hessian(res_sq)(self.p_opt.x))
+        fac = res_sq(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
+        print("Covariance of Tuned Parameters: ", cov*fac)
+
+
+
+
 
     def graph_tune(self, obs_name, graph_file = None):
         obs_bin_idns = self.fits.index[obs_name]
