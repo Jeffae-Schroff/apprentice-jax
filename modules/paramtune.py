@@ -21,7 +21,7 @@ class Paramtune:
         else:
             with open(target_json, 'r') as f:
                 target_data = json.loads(f.read())
-            #TODO: not generalized
+            #TODO: waiting for harvey's h5
             self.target_binidns = jnp.array(range(self.fits.p_coeffs.shape[0]))
             self.target_values = [target_data[k][0] for k in target_data]
             self.target_error = [target_data[k][1] for k in target_data]
@@ -30,39 +30,69 @@ class Paramtune:
         if kwargs['covariance']:
             self.obj_args = self.obj_args + (jnp.take(self.fits.cov, self.target_binidns, axis = 0),)
             self.objective = self.objective_func
+            self.objective_name = 'cov'
         else:
             self.objective = self.objective_func_no_err
+            self.objective_name ='no_err'
         if type(initial_guess) == str:
             initial_guess = self.calculate_initial(initial_guess)
             print("Calculated inital guess: ", initial_guess) 
         self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='Nelder-Mead')
         print("Tuned Parameters: ", self.p_opt.x)
 
-    def graph_tune(self, obs_name, graph_file = None):
-        obs_bin_idns = self.fits.index[obs_name]
+    def graph_tune(self, obs_name, graph_file = None, new_figure = True):
+        #only select binids from out obs_name for which there is target data
+        obs_bin_idns = jnp.intersect1d(jnp.array(self.fits.index[obs_name]), self.target_binidns)
         poly_opt = timing_van_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
         
-        plt.figure()
+        if new_figure: plt.figure()
         plt.title("Placeholder")
         #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
         plt.ylabel("Placeholder")
         plt.xlabel(obs_name + " bins")
-        num_bins = len(self.fits.index[obs_name])
-        num_ticks = 7
+        num_bins = len(obs_bin_idns)
+        num_ticks = 7 if num_bins > 14 else num_bins
         plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
         edges = range(num_bins + 1)
         plt.stairs([self.target_values[b] for b in obs_bin_idns], edges, label = 'Target Data')
         plt.stairs(tuned_y, edges, label = 'Surrogate(Tuned Parameters)')
         
         plt.legend()
+        if not graph_file == None: plt.savefig(graph_file)
+
+    #TODO: Record param name(s) so this can take param names and visualize that param
+    # It's in attributes of the param table of h5, so polyft needs to be changed too
+    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True):
+        cl = 0.68268949 #within 1 standard deviation
+        edof = dof_scale*(self.fits.num_coeffs - self.fits.dim)
+        target_dev = chi2.ppf(cl, edof)
+        print(f"target deviations {target_dev:.4f}, with confidence level {cl:.4f}, edof {edof:.4f}")
+        minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
+        if new_figure: plt.figure()
+        if self.fits.dim == 1:
+            graph_density = 500
+            x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
+            y = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
+            p = plt.plot(x, y, label = self.objective_name)
+
+            obj_opt = self.objective(self.p_opt.x, *self.obj_args)
+            plt.plot(self.p_opt.x, obj_opt, color = p[-1].get_color(), marker = 'o')
+            plt.axhline(target_dev + obj_opt, color = p[-1].get_color(), linestyle = 'dotted')
+            within_error = jnp.where(y < target_dev + obj_opt)[0] # possibly vulnerable to local minima
+            low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
+            plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
+            label= "[{:.4f}, {:.4f}]".format(low_bound,high_bound))
+            plt.legend()
+            plt.ylabel('objective')
+            plt.xlabel('MPIalphaS') #TODO make automatic
+            plt.yscale("log")
+        else:
+            print("not implemented")
         if not graph_file == None:
             plt.savefig(graph_file)
 
-    def graph_contour(self, obs_name, dof_scale = 1):
-        obs_bin_idns = self.fits.obs_index[obs_name]
-        target_deviation = chi2.ppf(0.68268949, dof_scale)
-        #temp
+        
 
     def calculate_initial(self, method):
         #takes guess in param range with smallest objective.
