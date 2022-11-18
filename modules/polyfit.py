@@ -10,6 +10,43 @@ from functools import partial
 
 
 class Polyfit:
+    """
+    Inner loop optimization.
+
+    Encompasses the inner loop optimization, which approximates each bin's dependence on the
+    parameters with a polynomial of predefined order. Fits Monte Carlo generated data to
+    polynomials by varying the coefficients of said polynomial.
+
+    Attributes
+    ----------
+    input_h5 : str
+        Filepath to h5 file containing data produced by Monte Carlo runs
+    order: int
+        Order of polynomial used to fit
+    dim: int
+    num_coeffs: int
+    bin_ids: [str]
+        Array of keys denoting each bin
+    index:
+    obs_index:
+    p_coeffs: [[float]]
+        2D array containing fitted polynomial coefficients for each bin. Terms in graded lexicographic order.
+    cov: [[[float]]]
+        3D array containing covariance matrix for fitted coefficients for each bin. Calculated via inverse Hessian
+    X:
+    Y:
+    res: [float]
+        Array of sumSq of residuals for each bin
+    chi2ndf:
+        TODO: fill this in
+
+    Methods
+
+    -------
+
+    """
+
+
     def __init__(self, npz_file, **kwargs):
         """ 
         If 'input_h5' are 'order' are given, fit polynomials of order order to each bin in input_h5,
@@ -76,6 +113,7 @@ class Polyfit:
                 self.res.append(bin_res[0]) #bin_res comes out of lstsq as a list
                 self.chi2ndf.append(bin_chi2/(self.num_coeffs-1)) #because it's supposed to be /ndf
                 
+                #Calculating covariance of coefficients using inverse Hessian
                 def res_sq(coeff):
                     return jnp.sum(jnp.square(bin_Y-VM@coeff))
                 def Hessian(func):
@@ -92,6 +130,7 @@ class Polyfit:
             self.save(npz_file)
             print(" inner loop done!")
 
+        
         elif 'covariance' in kwargs.keys():
             self.p_coeffs, self.res, self.chi2ndf, self.bin_ids, self.X, self.Y\
                 = np.empty(0),np.empty(0),np.empty(0),np.empty(0),np.empty(0),np.empty(0)
