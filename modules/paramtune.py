@@ -51,6 +51,7 @@ class Paramtune:
             self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']])
             self.target_values = kwargs['target_values']
             self.target_error = kwargs['target_errors']
+            
         else:
             with open(target_json, 'r') as f:
                 target_data = json.loads(f.read())
@@ -70,8 +71,17 @@ class Paramtune:
         if type(initial_guess) == str:
             initial_guess = self.calculate_initial(initial_guess)
             print("Calculated inital guess: ", initial_guess) 
-        self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='Nelder-Mead')
-        print("Tuned Parameters: ", self.p_opt.x)
+        self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='TNC')
+
+        # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],
+        # args = self.obj_args, method='TNC',tol=1e-6, options={'maxiter':1000, 'accuracy':1e-6})
+        # temp to match apprentice.
+        
+
+        opt_obj = self.objective(self.p_opt.x, *self.obj_args)
+        #Watch out for this if we have experiments with a significant amount of empty bins
+        self.ndf = len(self.target_binidns) - self.fits.dim
+        print("Tuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
 
         #Calculating covariance of parameters by means of inverse Hessian
             
@@ -114,10 +124,10 @@ class Paramtune:
     #TODO: Record param name(s) so this can take param names and visualize that param
     # It's in attributes of the param table of h5, so polyft needs to be changed too
     def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True):
-        cl = 0.68268949 #within 1 standard deviation
-        edof = dof_scale*(self.fits.num_coeffs - self.fits.dim)
-        target_dev = chi2.ppf(cl, edof)
-        print(f"target deviations {target_dev:.4f}, with confidence level {cl:.4f}, edof {edof:.4f}")
+        confidence_level = 0.68268949 #within 1 standard deviation
+        edof = dof_scale*(self.ndf)
+        target_dev = chi2.ppf(confidence_level, edof)
+        print(f"target deviation {target_dev:.4f}, with confidence level {cl:.4f}, edof {edof:.4f}")
         minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
         if new_figure: plt.figure()
         if self.fits.dim == 1:
@@ -134,7 +144,8 @@ class Paramtune:
             plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
             label= "[{:.4f}, {:.4f}]".format(low_bound,high_bound))
             plt.legend()
-            plt.ylabel('objective')
+            plt.title('Parameter regions within 1 std of tuned result')
+            plt.ylabel('Objective')
             plt.xlabel('MPIalphaS') #TODO make automatic
             plt.yscale("log")
         else:
@@ -166,7 +177,7 @@ class Paramtune:
 
         #Loop over the bins
         for i in self.target_binidns:
-            #We don't want to divide by 0. For real data, the error might be zero because no events were observered in the bin.
+            #We don't want to divide by 0. For real data, the error might be zero because no events were observed in the bin.
             if d_sig[i] == 0.0:
                 continue
             f_sig = jnp.sqrt(jnp.matmul(poly, jnp.matmul(cov[i], poly.T))) #Finding uncertainty of surrogate function at point p

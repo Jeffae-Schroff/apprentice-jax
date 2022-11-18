@@ -81,10 +81,11 @@ class Polyfit:
             self.obs_index = {}
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name.split('[')[0], []) for bin_name in self.index.keys()]
-
+            
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             self.cov = [] if kwargs['covariance'] else None 
 
+            #TODO: add bounds for params with minimum and maximum, multiple things would like to reference it.
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
             self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
             VM = self.vandermonde_jax(self.X, self.order)
@@ -120,11 +121,15 @@ class Polyfit:
                     return jax.jacfwd(jax.jacrev(res_sq))
                 #polynomialapproximation.fit code
                 if kwargs['covariance']:
-                    #cov = np.linalg.inv(VM.T@VM)
                     cov = jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs))
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
-                    bin_idn = self.bin_idn(bin_id)
                     self.cov.append(cov*fac)
+
+                    # #Old code!
+                    # cov = np.linalg.inv(VM.T@VM)
+                    # fac = bin_res / (VM.shape[0]-VM.shape[1])
+                    # self.cov.append(cov*fac)
+
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
             self.save(npz_file)
