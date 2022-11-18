@@ -1,17 +1,49 @@
 import jax.random as random
 import jax
 import jax.numpy as jnp
-from timing import timing_van_jax
 import scipy.optimize as opt
 from scipy.stats import chi2
 import matplotlib.pyplot as plt
 from modules.polyfit import Polyfit
 import json
+
+"""
+        TODO: Convert this to actual doc using str.__doc__
+        TODO: Use JAX for target_values/target_error? Is there a reason we use normal arrays for this?
+"""
+
 class Paramtune:
-    '''
-    TODO: document
-    '''
+    """
+    Outer loop optimization.
+
+    Encompasses the outer loop optimization, which fits each bin's surrogate function (some
+    polynomial in the parameters) to the target bin values by tuning the parameters.
+
+    Attributes
+    ----------
+    fits : Polyfit object
+        Inner-loop optimization surrogate functions. See Polyfit docu for detail
+    target_binidns : JAX array
+    target_values : Python array
+    target_error : Python array
+    obj_args :
+    objective : Function
+        The objective function which is used in optimization. Currently there is a version considering error and one which does not.
+    objective_name : str
+        Marker denoting which objective function is used.
+    p_opt : 
+        The output of the optimization. Use p_opt.x to obtain tuned parameters.
+    cov : 
+        Covariance matrix associated with the tuned parameters.
+
+
+    Methods
+    -------
+
+    """
+
     def __init__(self, npz_file, target_json, initial_guess = None, **kwargs):
+        
         self.fits = Polyfit(npz_file, **kwargs)
         
         # Read in target data
@@ -42,12 +74,18 @@ class Paramtune:
         print("Tuned Parameters: ", self.p_opt.x)
 
         #Calculating covariance of parameters by means of inverse Hessian
+            
+        
+        coeff_target_bins = jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0)
         def res_sq(param):
-            return jnp.sum(jnp.square(self.fits.p_coeffs@timing_van_jax([param], self.fits.order)[0] - jnp.array(self.target_values)))
+            poly = jnp.asarray(self.fits.vandermonde_jax([param], self.fits.order)[0])
+            print(coeff_target_bins.shape, poly.shape)
+            return jnp.sum(jnp.square(coeff_target_bins@poly - jnp.asarray(self.target_values)))
         def Hessian(func):
             return jax.jacfwd(jax.jacrev(res_sq))
         cov = jnp.linalg.inv(Hessian(res_sq)(self.p_opt.x))
         fac = res_sq(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
+        self.cov = cov*fac
         print("Covariance of Tuned Parameters: ", cov*fac)
 
 
@@ -57,10 +95,8 @@ class Paramtune:
     def graph_tune(self, obs_name, graph_file = None):
         #only select binids from out obs_name for which there is target data
         obs_bin_idns = self.fits.index[obs_name]
-        poly_opt = timing_van_jax([self.p_opt.x], 3)[0]
+        poly_opt = self.fits.vandermonde_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
-        
-        if new_figure: plt.figure()
         plt.title("Placeholder")
         #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
         plt.ylabel("Placeholder")
@@ -126,7 +162,7 @@ class Paramtune:
 
     def objective_func(self, params, d, d_sig, coeff, cov):
         sum_over = 0
-        poly = timing_van_jax([params], self.fits.order)[0]
+        poly = self.fits.vandermonde_jax([params], self.fits.order)[0]
 
         #Loop over the bins
         for i in self.target_binidns:
@@ -140,7 +176,7 @@ class Paramtune:
 
     def objective_func_no_err(self, p, d, d_sig, coeff):
         sum_over = 0
-        poly = timing_van_jax([p], self.fits.order)[0]
+        poly = self.fits.vandermonde_jax([p], self.fits.order)[0]
 
         #Loop over the bins
         for i in range(jnp.size(jnp.array(coeff), axis=0)):
