@@ -9,7 +9,7 @@ from functools import partial
 
 
 """
-        TODO: merge has mysterious variable "attr" in join_new, need to fix
+
 """
 class Polyfit:
     """
@@ -58,8 +58,9 @@ class Polyfit:
 
         Mandatory arguments:
         npz_file -- filepath for npz file storing results
-        Optional Keyword Arguments:
+        Keyword Arguments:
         covariance -- whether or not to create covariance matrix. permanent for this object
+        Optional Keyword Arguments (use to create fits):
         input_h5 -- the name of an h5 file with MC run results
         order -- the order of polynomial to fit each bin with
         """
@@ -67,6 +68,7 @@ class Polyfit:
         if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
+            self.has_cov = kwargs['covariance']
 
             f = h5py.File(self.input_h5, "r")
             self.dim = len(f['params'][0])
@@ -85,7 +87,7 @@ class Polyfit:
                 else self.obs_index.setdefault(bin_name.split('[')[0], []) for bin_name in self.index.keys()]
             
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
-            self.cov = [] if kwargs['covariance'] else None 
+            if self.has_cov: self.cov = []  
 
             #TODO: add bounds for params with minimum and maximum, multiple things would like to reference it.
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
@@ -120,9 +122,9 @@ class Polyfit:
                 def res_sq(coeff):
                     return jnp.sum(jnp.square(bin_Y-VM@coeff))
                 def Hessian(func):
-                    return jax.jacfwd(jax.jacrev(res_sq))
+                    return jax.jacfwd(jax.jacrev(func))
                 #polynomialapproximation.fit code
-                if kwargs['covariance']:
+                if self.has_cov:
                     cov = jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs))
                     fac = bin_res / (VM.shape[0]-VM.shape[1])
                     self.cov.append(cov*fac)
@@ -139,10 +141,7 @@ class Polyfit:
 
         #Initialize with all attributes empty
         elif 'covariance' in kwargs.keys():
-            self.p_coeffs, self.res, self.chi2ndf, self.bin_ids, self.X, self.Y\
-                = jnp.empty(0),jnp.empty(0),jnp.empty(0),jnp.empty(0),jnp.empty(0),jnp.empty(0)
-            self.cov = [] if kwargs['covariance'] else None 
-            self.order, self.dim = None, None
+            self.has_cov = kwargs['covariance']
             self.merge(npz_file, True)
         else:
             print('invalid args given to polyfit')
@@ -152,15 +151,20 @@ class Polyfit:
         For now, if new data has same bin ids as old data, both copies are kept.
         """
         all_dict = jnp.load(all_npz, allow_pickle=True)
-        if self.order is None and self.dim is None:
+        if new:
             self.order, self.dim = all_dict['order'], all_dict['dim']
         elif self.order != all_dict['order'] or self.dim != all_dict['dim']:
             print("merging data with different order/dim is not allowed(error)")
-        self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
-        def join_new(str): #jnp->numbers only
-            setattr(self, str, jnp.array(all_dict[str]) if new else jnp.concatenate([attr, all_dict[str]]))
-        for str in ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']: join_new(str)
-        if not self.cov is None: join_new('cov')
+        self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
+
+        jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']
+        if self.has_cov: jnp_vars.append('cov')
+        for str in jnp_vars: #jnp: numbers only
+            if new:
+                setattr(self, str, jnp.array(all_dict[str]))
+            else:
+                setattr(self, str, jnp.concatenate([getattr(self, str), all_dict[str]]))
+        
         # We recalculate index, obs_index from bin_ids. I decided to just store bin_ids because 
         # 1. npz likes np lists only and
         # 2. when we merge, iterating through index is inevitable``, we can't just concatenate.
@@ -173,24 +177,16 @@ class Polyfit:
 
 
     def save(self, all_npz):
-        """ Save data to given fileplaths
+        """ Save data to given filepath
 
         Mandatory arguments:
-        p_coeffs_npz -- filepath for npz file of the polynomial coefficients
-        chi2res_npz -- filepath for npz file of the chi2.ndf and residuals
-        Optional Keyword Arguments:
-        cov_npz -- filepath for npz of the covariance matrix
+        all_npz -- filepath for npz file of data
         """
         all_dict = {}
-        all_dict['p_coeffs'] = self.p_coeffs
-        all_dict['chi2ndf'] = self.chi2ndf
-        all_dict['res'] = self.res
-        all_dict['cov'] = self.cov 
-        all_dict['bin_ids'] = self.bin_ids
-        all_dict['X'] = self.X
-        all_dict['Y'] = self.Y
-        all_dict['dim'] = self.dim
-        all_dict['order'] = self.order
+        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'bin_ids', 'dim', 'order']
+        if self.has_cov: all_vars.append('cov') 
+        for str in all_vars:
+            all_dict[str] = getattr(self, str)
         jnp.savez(all_npz, **all_dict)
 
     def graph_bin(self, bin_id):
@@ -216,9 +212,9 @@ class Polyfit:
         Returns a surrogate that does not need pceoffs as an input; just takes x(param values).
         Returns chi2/ndf of fit, residual(s), and cov if it exists.
         """
-        bin_idn = self.bin_idn(bin_id) if type(bin_id) is str else bin_id        
+        bin_idn = self.bin_idn(bin_id) if type(bin_id) is str else bin_id     
         return partial(self.surrogate, p_coeffs = self.p_coeffs[bin_idn]), self.chi2ndf[bin_idn], self.res[bin_idn], \
-            self.cov[bin_idn] if self.cov else None
+            self.cov[bin_idn] if self.has_cov else None
     
     def surrogate(self, x, p_coeffs):
         """
