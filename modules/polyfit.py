@@ -155,7 +155,7 @@ class Polyfit:
         if self.order is None and self.dim is None:
             self.order, self.dim = all_dict['order'], all_dict['dim']
         elif self.order != all_dict['order'] or self.dim != all_dict['dim']:
-            print("merging data with different order/dim is not a pro gamer move(error)")
+            print("merging data with different order/dim is not allowed(error)")
         self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
         def join_new(str): #jnp->numbers only
             setattr(self, str, jnp.array(all_dict[str]) if new else jnp.concatenate([attr, all_dict[str]]))
