@@ -1,6 +1,5 @@
 import h5py
 from matplotlib import pyplot as plt
-import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.config import config
@@ -9,6 +8,9 @@ config.update('jax_platform_name', 'cpu')
 from functools import partial
 
 
+"""
+        TODO: merge has mysterious variable "attr" in join_new, need to fix
+"""
 class Polyfit:
     """
     Inner loop optimization.
@@ -41,7 +43,7 @@ class Polyfit:
         TODO: fill this in
 
     Methods
-
+    TODO
     -------
 
     """
@@ -135,10 +137,10 @@ class Polyfit:
             self.save(npz_file)
             print(" inner loop done!")
 
-        
+        #Initialize with all attributes empty
         elif 'covariance' in kwargs.keys():
             self.p_coeffs, self.res, self.chi2ndf, self.bin_ids, self.X, self.Y\
-                = np.empty(0),np.empty(0),np.empty(0),np.empty(0),np.empty(0),np.empty(0)
+                = jnp.empty(0),jnp.empty(0),jnp.empty(0),jnp.empty(0),jnp.empty(0),jnp.empty(0)
             self.cov = [] if kwargs['covariance'] else None 
             self.order, self.dim = None, None
             self.merge(npz_file, True)
@@ -162,7 +164,7 @@ class Polyfit:
         # We recalculate index, obs_index from bin_ids. I decided to just store bin_ids because 
         # 1. npz likes np lists only and
         # 2. when we merge, iterating through index is inevitable``, we can't just concatenate.
-        self.bin_ids = all_dict['bin_ids'] if new else np.concatenate([self.bin_ids, all_dict['bin_ids']])
+        self.bin_ids = all_dict['bin_ids'] if new else jnp.concatenate([self.bin_ids, all_dict['bin_ids']])
         self.index = {}
         [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]
         self.obs_index = {}
@@ -223,18 +225,18 @@ class Polyfit:
         Takes a list/array of param sets, and returns the surrogate's estimate for their nominal values.
         The length of the highest dimension of the list/array is the number of params.
         """
-        x = np.array(x)
+        x = jnp.array(x)
         dim = x.shape[-1]
         #has to be mutable the way this is written
-        term_powers = np.zeros(dim)
+        term_powers = jnp.zeros(dim)
         pvalues = []
         last_axis = None if len(x.shape) == 1 else len(x.shape)-1
         for pcoeff in p_coeffs:
             #appending the value of the term for each param set given
-            pvalues.append(pcoeff*np.prod(x**term_powers, axis = last_axis))
+            pvalues.append(pcoeff*jnp.prod(x**term_powers, axis = last_axis))
             term_powers = self.mono_next_grlex(dim, term_powers)
         #add along first axis to sum the terms for each param set
-        return np.sum(pvalues, axis=None if len(x.shape) == 1 else 0)
+        return jnp.sum(jnp.asarray(pvalues), axis=None if len(x.shape) == 1 else 0)
     
     def vandermonde_jax(self, params, order):
         """
@@ -247,15 +249,16 @@ class Polyfit:
             dim = 1
         params = jnp.array(params)
 
-        #We will take params to the power of grlex_pow element-wise
+        #Generate all compositions, will become parameter exponents. We will take params to the power of grlex_pow element-wise
         if dim == 1:
             grlex_pow = jnp.array(range(order+1))
         else:
             term_list = [[0]*dim]
             for i in range(1, self.numCoeffsPoly(dim, order)):
-                term_list.append(self.mono_next_grlex(dim, term_list[-1][:]))
+                term_list.append(self.mono_next_grlex(dim, jnp.asarray(term_list[-1][:])))
             grlex_pow = jnp.array(term_list)
         
+        #Take each parameter to powers in grlex_pow term by term
         if dim == 1:
             V = jnp.zeros((len(params), self.numCoeffsPoly(dim, order)), dtype=jnp.float64)
             for a, p in enumerate(params): 
@@ -296,7 +299,7 @@ class Polyfit:
         #  increase X(I-1) by 1,
         #  increment X(M) by T-1.
         if i == 0:
-            x[m-1] = 1
+            x = x.at[m-1].set(1)
             return x
         elif i == 1:
             t = x[0] + 1
@@ -305,9 +308,9 @@ class Polyfit:
             t = x[i-1]
             im1 = i - 1
 
-        x[i-1] = 0
-        x[im1-1] = x[im1-1] + 1
-        x[m-1] = x[m-1] + t - 1
+        x = x.at[i-1].set(0)
+        x = x.at[im1-1].set(x[im1-1] + 1)
+        x = x.at[m-1].set(x[m-1] + t - 1)
 
         return x
 

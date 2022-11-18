@@ -8,7 +8,7 @@ from modules.polyfit import Polyfit
 import json
 
 """
-        TODO: Convert this to actual doc using str.__doc__
+        TODO: Convert documentation to actual doc using str.__doc__
         TODO: Use JAX for target_values/target_error? Is there a reason we use normal arrays for this?
 """
 
@@ -48,7 +48,7 @@ class Paramtune:
         
         # Read in target data
         if 'target_bins' in kwargs.keys() and 'target_values' in kwargs.keys() and 'target_errors' in kwargs.keys():
-            self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']])
+            self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']]) #The user can select which bins they wish to be considered in the tuning
             self.target_values = kwargs['target_values']
             self.target_error = kwargs['target_errors']
             
@@ -83,13 +83,11 @@ class Paramtune:
         self.ndf = len(self.target_binidns) - self.fits.dim
         print("Tuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
 
+
         #Calculating covariance of parameters by means of inverse Hessian
-            
-        
         coeff_target_bins = jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0)
         def res_sq(param):
             poly = jnp.asarray(self.fits.vandermonde_jax([param], self.fits.order)[0])
-            print(coeff_target_bins.shape, poly.shape)
             return jnp.sum(jnp.square(coeff_target_bins@poly - jnp.asarray(self.target_values)))
         def Hessian(func):
             return jax.jacfwd(jax.jacrev(res_sq))
@@ -97,10 +95,6 @@ class Paramtune:
         fac = res_sq(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
         self.cov = cov*fac
         print("Covariance of Tuned Parameters: ", cov*fac)
-
-
-
-
 
     def graph_tune(self, obs_name, graph_file = None):
         #only select binids from out obs_name for which there is target data
@@ -127,7 +121,7 @@ class Paramtune:
         confidence_level = 0.68268949 #within 1 standard deviation
         edof = dof_scale*(self.ndf)
         target_dev = chi2.ppf(confidence_level, edof)
-        print(f"target deviation {target_dev:.4f}, with confidence level {cl:.4f}, edof {edof:.4f}")
+        print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
         minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
         if new_figure: plt.figure()
         if self.fits.dim == 1:
@@ -170,7 +164,7 @@ class Paramtune:
         else:
             print("initial guess calulation method invalid")
 
-
+    #Objective function which considers the errors in the inner-loop coefficients
     def objective_func(self, params, d, d_sig, coeff, cov):
         sum_over = 0
         poly = self.fits.vandermonde_jax([params], self.fits.order)[0]
@@ -185,6 +179,7 @@ class Paramtune:
             sum_over = sum_over + adj_res_sq
         return sum_over
 
+    #Objective function which does not consider the errors in the inner-loop coefficients
     def objective_func_no_err(self, p, d, d_sig, coeff):
         sum_over = 0
         poly = self.fits.vandermonde_jax([p], self.fits.order)[0]
