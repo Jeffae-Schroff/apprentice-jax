@@ -9,7 +9,6 @@ import json
 
 """
         TODO: Convert documentation to actual doc using str.__doc__
-        TODO: Use JAX for target_values/target_error? Is there a reason we use normal arrays for this?
 """
 
 class Paramtune:
@@ -24,8 +23,8 @@ class Paramtune:
     fits : Polyfit object
         Inner-loop optimization surrogate functions. See Polyfit docu for detail
     target_binidns : JAX array
-    target_values : Python array
-    target_error : Python array
+    target_values : JAX array
+    target_error : JAX array
     obj_args :
     objective : Function
         The objective function which is used in optimization. Currently there is a version considering error and one which does not.
@@ -42,17 +41,17 @@ class Paramtune:
 
     """
 
-    def __init__(self, npz_file, target_json, initial_guess = None, **kwargs):
+    def __init__(self, npz_file, target_json, initial_guess = 'sample_range', envelopes = False, **kwargs):
         
         self.fits = Polyfit(npz_file, **kwargs)
         
-        # Read in target data
+        # Read in target data:
         if 'target_bins' in kwargs.keys() and 'target_values' in kwargs.keys() and 'target_errors' in kwargs.keys():
             self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']]) #The user can select which bins they wish to be considered in the tuning
             self.target_values = kwargs['target_values']
             self.target_error = kwargs['target_errors']
-            
         else:
+            # use all target data in json
             with open(target_json, 'r') as f:
                 target_data = json.loads(f.read())
             #TODO: waiting for harvey's h5
@@ -60,6 +59,7 @@ class Paramtune:
             self.target_values = [target_data[k][0] for k in target_data]
             self.target_error = [target_data[k][1] for k in target_data]
         
+
         self.obj_args = (self.target_values, self.target_error, jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
         if kwargs['covariance']:
             self.obj_args = self.obj_args + (jnp.take(self.fits.cov, self.target_binidns, axis = 0),)
@@ -101,6 +101,7 @@ class Paramtune:
         obs_bin_idns = self.fits.index[obs_name]
         poly_opt = self.fits.vandermonde_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
+        plt.figure()
         plt.title("Placeholder")
         #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
         plt.ylabel("Placeholder")
@@ -115,8 +116,8 @@ class Paramtune:
         plt.legend()
         if not graph_file == None: plt.savefig(graph_file)
 
-    #TODO: Record param name(s) so this can take param names and visualize that param
-    # It's in attributes of the param table of h5, so polyft needs to be changed too
+    #TODO: Record param name(s) so this can take param name(s) and visualize that param
+    # It's in attributes of the param table of h5, so polyfit needs to be changed too
     def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True):
         confidence_level = 0.68268949 #within 1 standard deviation
         edof = dof_scale*(self.ndf)

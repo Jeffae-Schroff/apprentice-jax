@@ -142,7 +142,8 @@ class Polyfit:
         #Initialize with all attributes empty
         elif 'covariance' in kwargs.keys():
             self.has_cov = kwargs['covariance']
-            self.merge(npz_file, True)
+            self.merge(npz_file, new = True)
+            self.save(npz_file)
         else:
             print('invalid args given to polyfit')
 
@@ -154,7 +155,7 @@ class Polyfit:
         if new:
             self.order, self.dim = all_dict['order'], all_dict['dim']
         elif self.order != all_dict['order'] or self.dim != all_dict['dim']:
-            print("merging data with different order/dim is not a pro gamer move(error)")
+            print("merging data with different order/dim is invalid")
         self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
 
         jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']
@@ -167,7 +168,7 @@ class Polyfit:
         
         # We recalculate index, obs_index from bin_ids. I decided to just store bin_ids because 
         # 1. npz likes np lists only and
-        # 2. when we merge, iterating through index is inevitable``, we can't just concatenate.
+        # 2. when we merge, iterating through index is inevitable, we can't just concatenate.
         self.bin_ids = all_dict['bin_ids'] if new else jnp.concatenate([self.bin_ids, all_dict['bin_ids']])
         self.index = {}
         [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]
