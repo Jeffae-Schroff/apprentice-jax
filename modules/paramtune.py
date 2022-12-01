@@ -97,7 +97,7 @@ class Paramtune:
         print("Covariance of Tuned Parameters: ", cov*fac)
 
     def graph_tune(self, obs_name, graph_file = None):
-        #only select binids from out obs_name for which there is target data
+        #only select binids from obs_name for which there is target data
         obs_bin_idns = self.fits.index[obs_name]
         poly_opt = self.fits.vandermonde_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
@@ -107,7 +107,7 @@ class Paramtune:
         plt.ylabel("Placeholder")
         plt.xlabel(obs_name + " bins")
         num_bins = len(obs_bin_idns)
-        num_ticks = 7 if num_bins > 14 else num_bins
+        num_ticks = 7 if num_bins > 14 else num_bins #make whole numbers
         plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
         edges = range(num_bins + 1)
         plt.stairs([self.target_values[b] for b in obs_bin_idns], edges, label = 'Target Data')
@@ -147,8 +147,13 @@ class Paramtune:
             print("not implemented")
         if not graph_file == None:
             plt.savefig(graph_file)
-
-        
+    
+    def graph_envelope_target(self):
+        for obs in self.fits.obs_index.keys():
+            self.fits.graph_envelope([obs])
+            obs_bin_idns = self.fits.index[obs]
+            plt.stairs([self.target_values[b] for b in obs_bin_idns], range(len(obs_bin_idns) + 1), label = 'target')
+            plt.legend
 
     def calculate_initial(self, method):
         #takes guess in param range with smallest objective.

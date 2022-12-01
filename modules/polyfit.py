@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 import jax
 import jax.numpy as jnp
 from jax.config import config
-config.update("jax_enable_x64", True)
+config.update('jax_enable_x64', True)
 config.update('jax_platform_name', 'cpu')
 from functools import partial
 
@@ -84,7 +84,7 @@ class Polyfit:
             # keys observable names to their error bin names
             self.obs_index = {}
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
-                else self.obs_index.setdefault(bin_name.split('[')[0], []) for bin_name in self.index.keys()]
+                else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []  
@@ -168,13 +168,13 @@ class Polyfit:
         
         # We recalculate index, obs_index from bin_ids. I decided to just store bin_ids because 
         # 1. npz likes np lists only and
-        # 2. when we merge, iterating through index is inevitable, we can't just concatenate.
+        # Actually though we might be able to concatenate on merge if we store it. worth thinking about
         self.bin_ids = all_dict['bin_ids'] if new else jnp.concatenate([self.bin_ids, all_dict['bin_ids']])
         self.index = {}
         [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]
         self.obs_index = {}
-        [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) 
-            for bin_name in self.index.keys() if ('[') in bin_name]
+        [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
+            else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
 
 
     def save(self, all_npz):
@@ -195,7 +195,6 @@ class Polyfit:
         Takes bin_id, in format bin_name#bin_number
         graphs values of bin across runs and the surrogate function that was fitted to it
         """
-        
         plt.figure()
         plt.title("Verification graph for " + bin_id)
         plt.ylabel("Values")
@@ -206,6 +205,27 @@ class Polyfit:
         surrogate_y = surrogate(self.X)
         plt.stairs(surrogate_y, edges, label = 'Surrogate(Tuned Parameters)')
         plt.legend()
+
+    def graph_envelope(self, graph_obs = None):
+        ymin = self.Y.min(axis=1)
+        ymax = self.Y.max(axis=1)
+        if graph_obs is None:
+            graph_obs = self.obs_index.keys()
+        for obs in graph_obs:
+            obs_bin_idns = jnp.array(self.index[obs])
+            plt.figure()
+            plt.title("Envelope of " + obs)
+            #Might be something like "number of events", but depends on what observable is.
+            plt.ylabel("Placeholder")
+            plt.xlabel(obs + " bins")
+            num_bins = len(obs_bin_idns)
+            num_ticks = 7 if num_bins > 14 else num_bins #make whole numbers
+            edges = range(num_bins + 1)
+            plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
+            plt.stairs(jnp.take(ymin, obs_bin_idns), edges, label = 'min')
+            plt.stairs(jnp.take(ymax, obs_bin_idns), edges, label = 'max')
+            plt.legend()
+            
 
     def get_surrogate_func(self, bin_id):
         """
