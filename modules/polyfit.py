@@ -143,7 +143,6 @@ class Polyfit:
         elif 'covariance' in kwargs.keys():
             self.has_cov = kwargs['covariance']
             self.merge(npz_file, new = True)
-            self.save(npz_file)
         else:
             print('invalid args given to polyfit')
 

@@ -56,9 +56,17 @@ class Paramtune:
                 target_data = json.loads(f.read())
             #TODO: waiting for harvey's h5
             self.target_binidns = jnp.array(range(self.fits.p_coeffs.shape[0]))
-            self.target_values = [target_data[k][0] for k in target_data]
-            self.target_error = [target_data[k][1] for k in target_data]
+            self.target_values = jnp.array([target_data[k][0] for k in target_data])
+            self.target_error = jnp.array([target_data[k][1] for k in target_data])
         
+        # Filter target data. Perhaps expand this to more than value 0, error 0?
+        valid = []
+        for i, (value, error) in enumerate(zip(self.target_values, self.target_error)):
+            if not (value == 0 and error == 0):
+                valid.append(i)
+        self.target_binidns = jnp.take(self.target_binidns, jnp.array(valid))
+        self.target_values = jnp.take(self.target_values, jnp.array(valid))
+        self.target_error = jnp.take(self.target_error, jnp.array(valid))
 
         self.obj_args = (self.target_values, self.target_error, jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
         if kwargs['covariance']:
@@ -118,7 +126,7 @@ class Paramtune:
 
     #TODO: Record param name(s) so this can take param name(s) and visualize that param
     # It's in attributes of the param table of h5, so polyfit needs to be changed too
-    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True):
+    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None):
         confidence_level = 0.68268949 #within 1 standard deviation
         edof = dof_scale*(self.ndf)
         target_dev = chi2.ppf(confidence_level, edof)
@@ -126,23 +134,30 @@ class Paramtune:
         minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
         if new_figure: plt.figure()
         if self.fits.dim == 1:
-            graph_density = 500
-            x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
-            y = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
+            graph_density = 1000
+            if graph_range is None:
+                x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
+            else:
+                x = jnp.arange(graph_range[0], graph_range[1], (graph_range[1]-graph_range[0])/graph_density)
+
+            objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
+            objective_opt = self.objective(self.p_opt.x, *self.obj_args)
+            y = objective_x - objective_opt
             p = plt.plot(x, y, label = self.objective_name)
 
-            obj_opt = self.objective(self.p_opt.x, *self.obj_args)
-            plt.plot(self.p_opt.x, obj_opt, color = p[-1].get_color(), marker = 'o')
-            plt.axhline(target_dev + obj_opt, color = p[-1].get_color(), linestyle = 'dotted')
-            within_error = jnp.where(y < target_dev + obj_opt)[0] # possibly vulnerable to local minima
+            plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
+            plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
+            within_error = jnp.where(y < target_dev)[0] # possibly vulnerable to local minima
             low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
             plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
             label= "[{:.4f}, {:.4f}]".format(low_bound,high_bound))
             plt.legend()
             plt.title('Parameter regions within 1 std of tuned result')
-            plt.ylabel('Objective')
+            plt.ylabel('Objective - Optimal objective')
             plt.xlabel('MPIalphaS') #TODO make automatic
-            plt.yscale("log")
+            #use logscale if the graph is spiky
+            if(max(y) > target_dev*50): 
+                plt.yscale("log")
         else:
             print("not implemented")
         if not graph_file == None:
@@ -177,9 +192,6 @@ class Paramtune:
 
         #Loop over the bins
         for i in self.target_binidns:
-            #We don't want to divide by 0. For real data, the error might be zero because no events were observed in the bin.
-            if d_sig[i] == 0.0:
-                continue
             f_sig = jnp.sqrt(jnp.matmul(poly, jnp.matmul(cov[i], poly.T))) #Finding uncertainty of surrogate function at point p
             adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2 + f_sig**2) #Inner part of summation
             sum_over = sum_over + adj_res_sq
@@ -192,8 +204,6 @@ class Paramtune:
 
         #Loop over the bins
         for i in range(jnp.size(jnp.array(coeff), axis=0)):
-            if d_sig[i] == 0.0:
-                continue
             adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2) #Inner part of summation
             sum_over = sum_over + adj_res_sq
         return sum_over
