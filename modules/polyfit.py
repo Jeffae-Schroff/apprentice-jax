@@ -155,7 +155,7 @@ class Polyfit:
         if new:
             self.order, self.dim = all_dict['order'], all_dict['dim']
         elif self.order != all_dict['order'] or self.dim != all_dict['dim']:
-            print("merging data with different order/dim is invalid")
+            print("merging data with different order/dim is not allowed(error)")
         self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
 
         jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']
