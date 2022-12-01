@@ -3,6 +3,7 @@ from matplotlib import pyplot as plt
 import jax
 import jax.numpy as jnp
 from jax.config import config
+import numpy as np
 config.update('jax_enable_x64', True)
 config.update('jax_platform_name', 'cpu')
 from functools import partial
@@ -71,42 +72,39 @@ class Polyfit:
             self.has_cov = kwargs['covariance']
 
             f = h5py.File(self.input_h5, "r")
-            self.dim = len(f['params'][0])
-            self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
-            self.bin_ids = [x.decode() for x in f.get("index")[:]]
+            self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
+            self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
+            self.bin_ids = np.array([x.decode() for x in f.get("index")[:]])
+            #filter out bins with invalid value for any mc_run
+            invalid = jnp.array(jnp.any(abs(self.Y[:,:]) > 1000, axis = 1).nonzero()[0])
+            print("Filtering", len(invalid), "bins for invalid input")
+            self.Y = jnp.delete(self.Y, invalid, axis=0)
+            self.bin_ids = np.delete(self.bin_ids, invalid)
+            
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
             # If bin not a key in index yet, start a new list as its value. Append count to bin's value. 
-            [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]
-            # some bins_names have '[]' and actually represent uncertainties. We will have to handle this outside of the npz file.
-
-            
+            [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]            
             # keys observable names to their error bin names
             self.obs_index = {}
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
-            self.p_coeffs, self.chi2ndf, self.res = [],[],[]
-            if self.has_cov: self.cov = []  
-
-            #TODO: add bounds for params with minimum and maximum, multiple things would like to reference it.
-            self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
-            self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
+            self.dim = self.X.shape[1]
+            self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
             VM = self.vandermonde_jax(self.X, self.order)
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
             #TODO: make uncertainty symmetric if we can't do asymmetric
-            bin_count = 0
-            
-            print("Fitting bins: ")
 
-            for bin_id in self.bin_ids:
-                bin_count += 1
+            self.p_coeffs, self.chi2ndf, self.res = [],[],[]
+            if self.has_cov: self.cov = []
+            for bin_count, bin_id in enumerate(self.bin_ids):
                 if 'num_bins' in kwargs.keys() and bin_count > kwargs['num_bins']:
                     break
-                print(bin_id, end = ', ')
-                bin_name, bin_number = bin_id.split('#')[0], int(bin_id.split('#')[1])
-                bin_Y = jnp.array(f['values'][self.index[bin_name][int(bin_number)]])
+                print("\rFitting {:d} of {:d}: {:60s}".format(bin_count, self.Y.shape[0], bin_id), end='')
+                
+                bin_Y = self.Y[self.bin_idn(bin_id),:]
                 
                 #polynomialapproximation.coeffsolve2 code
                 bin_p_coeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, bin_Y, rcond=None)
@@ -137,7 +135,6 @@ class Polyfit:
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
             self.save(npz_file)
-            print(" inner loop done!")
 
         #Initialize with all attributes empty
         elif 'covariance' in kwargs.keys():
@@ -199,7 +196,7 @@ class Polyfit:
         plt.ylabel("Values")
         plt.xlabel("MC runs")
         edges = range(self.X.shape[0] + 1)
-        plt.stairs([y for y in self.Y[self.bin_idn(bin_id), :]], edges, label = 'Target Data')
+        plt.stairs([y for y in self.Y[self.fits.bin_idn(bin_id), :]], edges, label = 'Target Data')
         surrogate, chi2, res, cov = self.get_surrogate_func(bin_id)
         surrogate_y = surrogate(self.X)
         plt.stairs(surrogate_y, edges, label = 'Surrogate(Tuned Parameters)')
@@ -210,6 +207,8 @@ class Polyfit:
         ymax = self.Y.max(axis=1)
         if graph_obs is None:
             graph_obs = self.obs_index.keys()
+        elif type(graph_obs) == str:
+            graph_obs = [graph_obs]
         for obs in graph_obs:
             obs_bin_idns = jnp.array(self.index[obs])
             plt.figure()
@@ -283,8 +282,9 @@ class Polyfit:
         else:
             V = jnp.power(params, grlex_pow[:, jnp.newaxis])
             return jnp.prod(V, axis=2).T
+
     def bin_idn(self, bin_id):
-        # Convert bin_id in fomart bin_name#bin_number to binidn
+        # Convert bin_id in format bin_name#bin_number to binidn
         return self.index[bin_id.split('#')[0]][int(bin_id.split('#')[1])]
     
     def numCoeffsPoly(self, dim, order):

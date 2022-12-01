@@ -48,6 +48,7 @@ class Paramtune:
         # Read in target data:
         if 'target_bins' in kwargs.keys() and 'target_values' in kwargs.keys() and 'target_errors' in kwargs.keys():
             self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']]) #The user can select which bins they wish to be considered in the tuning
+            print(self.target_binidns)
             self.target_values = kwargs['target_values']
             self.target_error = kwargs['target_errors']
         else:
@@ -104,77 +105,11 @@ class Paramtune:
         self.cov = cov*fac
         print("Covariance of Tuned Parameters: ", cov*fac)
 
-    def graph_tune(self, obs_name, graph_file = None):
-        #only select binids from obs_name for which there is target data
-        obs_bin_idns = self.fits.index[obs_name]
-        poly_opt = self.fits.vandermonde_jax([self.p_opt.x], 3)[0]
-        tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
-        plt.figure()
-        plt.title("Placeholder")
-        #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
-        plt.ylabel("Placeholder")
-        plt.xlabel(obs_name + " bins")
-        num_bins = len(obs_bin_idns)
-        num_ticks = 7 if num_bins > 14 else num_bins #make whole numbers
-        plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
-        edges = range(num_bins + 1)
-        plt.stairs([self.target_values[b] for b in obs_bin_idns], edges, label = 'Target Data')
-        plt.stairs(tuned_y, edges, label = 'Surrogate(Tuned Parameters)')
-        
-        plt.legend()
-        if not graph_file == None: plt.savefig(graph_file)
-
-    #TODO: Record param name(s) so this can take param name(s) and visualize that param
-    # It's in attributes of the param table of h5, so polyfit needs to be changed too
-    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None):
-        confidence_level = 0.68268949 #within 1 standard deviation
-        edof = dof_scale*(self.ndf)
-        target_dev = chi2.ppf(confidence_level, edof)
-        print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
-        minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
-        if new_figure: plt.figure()
-        if self.fits.dim == 1:
-            graph_density = 1000
-            if graph_range is None:
-                x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
-            else:
-                x = jnp.arange(graph_range[0], graph_range[1], (graph_range[1]-graph_range[0])/graph_density)
-
-            objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
-            objective_opt = self.objective(self.p_opt.x, *self.obj_args)
-            y = objective_x - objective_opt
-            p = plt.plot(x, y, label = self.objective_name)
-
-            plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
-            plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
-            within_error = jnp.where(y < target_dev)[0] # possibly vulnerable to local minima
-            low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
-            plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
-            label= "[{:.4f}, {:.4f}]".format(low_bound,high_bound))
-            plt.legend()
-            plt.title('Parameter regions within 1 std of tuned result')
-            plt.ylabel('Objective - Optimal objective')
-            plt.xlabel('MPIalphaS') #TODO make automatic
-            #use logscale if the graph is spiky
-            if(max(y) > target_dev*50): 
-                plt.yscale("log")
-        else:
-            print("not implemented")
-        if not graph_file == None:
-            plt.savefig(graph_file)
-    
-    def graph_envelope_target(self):
-        for obs in self.fits.obs_index.keys():
-            self.fits.graph_envelope([obs])
-            obs_bin_idns = self.fits.index[obs]
-            plt.stairs([self.target_values[b] for b in obs_bin_idns], range(len(obs_bin_idns) + 1), label = 'target')
-            plt.legend
-
     def calculate_initial(self, method):
         #takes guess in param range with smallest objective.
         if method == 'sample_range':
             num_samples = 50
-            #TODO: replace 2403 before this gets used on Cori
+            #TODO: make sure 2043 seed okay before this goes to Cori
             samples = random.uniform(random.PRNGKey(2403), (num_samples,self.fits.dim),\
                 minval = self.fits.X.min(axis = 0), maxval = self.fits.X.max(axis = 0), dtype=jnp.float64)
             objective = jnp.apply_along_axis(self.objective, 1, samples, *self.obj_args)
@@ -207,3 +142,72 @@ class Paramtune:
             adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2) #Inner part of summation
             sum_over = sum_over + adj_res_sq
         return sum_over
+    
+    #TODO: Record param name(s) so this can take param name(s) and visualize that param
+    # It's in attributes of the param table of h5, so polyfit needs to be changed too
+    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None):
+        std = 1
+        confidence_level = 0.68268949 * std #within 1 standard deviation
+        edof = dof_scale*(self.ndf)
+        target_dev = chi2.ppf(confidence_level, edof)
+        print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
+        minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
+        if new_figure: plt.figure()
+        if self.fits.dim == 1:
+            graph_density = 1000
+            if graph_range is None:
+                x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
+            else:
+                x = jnp.arange(graph_range[0], graph_range[1], (graph_range[1]-graph_range[0])/graph_density)
+
+            objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
+            objective_opt = self.objective(self.p_opt.x, *self.obj_args)
+            y = objective_x - objective_opt
+            p = plt.plot(x, y, label = self.objective_name)
+
+            plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
+            plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
+            within_error = jnp.where(y < target_dev)[0] # possibly vulnerable to local minima
+            low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
+            plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
+            label= "[{:.4f}, {:.4f}]".format(low_bound,high_bound))
+            plt.legend()
+            plt.title('Parameter regions within ' + str(std) + ' std of tuned result')
+            plt.ylabel('Objective - Optimal objective')
+            plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic
+            #use logscale if the graph is spiky
+            if(max(y) > target_dev*50): 
+                plt.yscale("log")
+        else:
+            print("not implemented")
+        if not graph_file == None:
+            plt.savefig(graph_file)
+
+    def graph_tune(self, obs_name, graph_file = None):
+        #only select binids from obs_name for which there is target data
+        obs_bin_idns = jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name]))
+        poly_opt = self.fits.vandermonde_jax([self.p_opt.x], 3)[0]
+        tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
+        plt.figure()
+        plt.title("Placeholder")
+        #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
+        plt.ylabel("Placeholder")
+        plt.xlabel(obs_name + " bins")
+        num_bins = len(obs_bin_idns)
+        num_ticks = 7 if num_bins > 14 else num_bins #make whole numbers
+        plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
+        edges = range(num_bins + 1)
+        plt.stairs([self.target_values[b] for b in obs_bin_idns], edges, label = 'Target Data')
+        plt.stairs(tuned_y, edges, label = 'Surrogate(Tuned Parameters)')
+        
+        plt.legend()
+        if not graph_file == None: plt.savefig(graph_file)
+    
+    # probably don't call if there are more than 20 observables w/ target data
+    def graph_envelope_target(self):
+        for obs_name in self.fits.obs_index.keys():
+            obs_bin_idns = jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name]))
+            if obs_bin_idns.size > 0:
+                self.fits.graph_envelope([obs_name])
+                plt.stairs([self.target_values[b] for b in obs_bin_idns], range(len(obs_bin_idns) + 1), label = 'target')
+                plt.legend()
