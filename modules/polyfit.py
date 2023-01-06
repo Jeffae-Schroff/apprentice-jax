@@ -216,7 +216,7 @@ class Polyfit:
         plt.ylabel("Values")
         plt.xlabel("MC runs")
         edges = range(self.X.shape[0] + 1)
-        plt.stairs([y for y in self.Y[self.fits.bin_idn(bin_id), :]], edges, label = 'Target Data')
+        plt.stairs([y for y in self.Y[self.bin_idn(bin_id), :]], edges, label = 'Target Data')
         surrogate, chi2, res, cov = self.get_surrogate_func(bin_id)
         surrogate_y = surrogate(self.X)
         plt.stairs(surrogate_y, edges, label = 'Surrogate(Tuned Parameters)')
