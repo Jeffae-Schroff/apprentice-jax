@@ -58,7 +58,6 @@ class Paramtune:
             self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in target_binids])
             self.target_values = jnp.array(f['main'][:,1], dtype=np.float64)[kwargs['target_bins']]
             self.target_error = jnp.array(f['main'][:,7], dtype=np.float64)[kwargs['target_bins']]
-
         elif file_ending == "json":
             # use all target data in json
             with open(target_file, 'r') as f:
@@ -102,8 +101,7 @@ class Paramtune:
             
 
             opt_obj = self.objective(self.p_opt.x, *self.obj_args)
-            #Watch out for this if we have experiments with a significant amount of empty bins
-            print("Tuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
+            print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
 
             #Calculating covariance of parameters by means of inverse Hessian
             coeff_target_bins = jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0)
@@ -156,7 +154,8 @@ class Paramtune:
         return sum_over
     
     # TODO: parallelize. Does it make sense for this to be attached to a specific paramtune object? 
-    def graph_chi2_sample(self, input_h5, num_samples, sample_prop, color, new_figure = True, save_figure = None, graph_range = [0.3,30], save_file = None):
+    def graph_chi2_sample(self, input_h5, num_samples, sample_prop, color,
+     new_figure = True, save_figure = None, graph_range = [0.1,1000], save_file = None, **kwargs):
         num_runs = self.fits.X.shape[0]
         sample_size = round(sample_prop * num_runs)
         print("Tuning with", num_samples, "samples of size", sample_size, "out of", num_runs)
@@ -169,7 +168,8 @@ class Paramtune:
         for i in range(num_samples):
             #temporarily replace self.fits with a Polyfit made with mc_run sample.
             self.fits = Polyfit(None, sample_size, False, input_h5 = input_h5,
-            order = self.fits.order, covariance = self.fits.has_cov)
+            order = self.fits.order, covariance = self.fits.has_cov, **kwargs)
+
             #set up objective arguments using sampled Polyfit
             obj_args = (self.target_values, self.target_error, jnp.take(jnp.array(self.fits.p_coeffs), self.target_binidns, axis = 0))
             if self.fits.has_cov:
@@ -193,7 +193,7 @@ class Paramtune:
             plt.figure()
             plt.title("chi2/ndf for " + str(num_samples) + " mc_run samples")
             plt.ylabel("Frequency")
-            plt.xlabel("chi/ndf")
+            plt.xlabel("chi2/ndf")
             plt.xscale('log')
         label = self.objective_name + ": {:.2f} +/- {:.2f}".format(jnp.mean(jnp.array(chi2ndf)), jnp.std(jnp.array(chi2ndf)))
         plt.hist(chi2ndf, bins = 'doane', label = label, range = graph_range, facecolor = color)
@@ -276,7 +276,6 @@ class Paramtune:
         for obs_name in self.fits.obs_index.keys():
             target_bins = len(jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name])))
             if target_bins > 0:
-                print(self.target_values[place:place+target_bins])
                 self.fits.graph_envelope([obs_name])
                 plt.stairs(self.target_values[place:place+target_bins], range(target_bins + 1), label = 'target')
                 plt.legend()
