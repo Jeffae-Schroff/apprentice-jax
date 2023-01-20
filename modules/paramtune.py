@@ -42,33 +42,34 @@ class Paramtune:
 
     """
 
-    def __init__(self, npz_file, target_json, initial_guess = 'sample_range', tune = True, **kwargs):
+    def __init__(self, npz_file, target_file, initial_guess = 'sample_range', tune = True, **kwargs):
         self.fits = Polyfit(npz_file, **kwargs)
         self.tune = tune
-        # Read in target data:
-        if 'target_bins' in kwargs.keys() and 'target_values' in kwargs.keys() and 'target_errors' in kwargs.keys():
-            #The user can select which bins they wish to be considered in the tuning
-            self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']]) 
-            self.target_values = kwargs['target_values']
-            self.target_error = kwargs['target_errors']
-        elif 'target_h5' in kwargs.keys() and 'target_bins' in kwargs.keys():
-            #find target_binidns in fits index
-            f = h5py.File(kwargs['target_h5'], "r")
-            target_binids = f['main'][:,0][kwargs['target_bins']]
+        file_ending = target_file.split('.')[-1]
+        if file_ending == "h5":
+            f = h5py.File(target_file, "r")
+            if 'target_bins' in kwargs.keys():
+                target_binids = f['main'][:,0][kwargs['target_bins']]
+            else:
+                target_binids = f['main'][:,0]
             #change format from target h5 to match h5 file from pythia
             target_binids = [str(b,'utf8') for b in target_binids]
+            #find target_binidns in fits index
             self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in target_binids])
             self.target_values = jnp.array(f['main'][:,1], dtype=np.float64)[kwargs['target_bins']]
             self.target_error = jnp.array(f['main'][:,7], dtype=np.float64)[kwargs['target_bins']]
 
-        else:
+        elif file_ending == "json":
             # use all target data in json
-            with open(target_json, 'r') as f:
+            with open(target_file, 'r') as f:
                 target_data = json.loads(f.read())
             self.target_binidns = jnp.array(range(self.fits.p_coeffs.shape[0]))
             self.target_values = jnp.array([target_data[k][0] for k in target_data])
             self.target_error = jnp.array([target_data[k][1] for k in target_data])
-        
+        else:
+            print("bad file ending")
+            return
+
         # Filter out target data if value 0, error 0. Filter out if binidn is -1
         valid = []
         for i, (binidn, value, error) in enumerate(zip(self.target_binidns, self.target_values, self.target_error)):
@@ -192,7 +193,8 @@ class Paramtune:
             plt.figure()
             plt.title("chi2/ndf for " + str(num_samples) + " mc_run samples")
             plt.ylabel("Frequency")
-            plt.xlabel("chi/ndf")  
+            plt.xlabel("chi/ndf")
+            plt.xscale('log')
         label = self.objective_name + ": {:.2f} +/- {:.2f}".format(jnp.mean(jnp.array(chi2ndf)), jnp.std(jnp.array(chi2ndf)))
         plt.hist(chi2ndf, bins = 'doane', label = label, range = graph_range, facecolor = color)
         plt.legend()
@@ -240,8 +242,8 @@ class Paramtune:
             plt.title('Parameter regions within ' + str(std) + ' std of tuned result')
             plt.ylabel('Objective - Optimal objective')
             plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic
-            #use logscale if the graph is spiky
-            if(max(y) > target_dev*50): 
+            #use logscale if the graph is really spiky
+            if(max(y) > target_dev*200): 
                 plt.yscale("log")
         else:
             print("not implemented")
