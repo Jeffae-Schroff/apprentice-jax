@@ -47,15 +47,19 @@ class Paramtune:
         self.tune = tune
         # Read in target data:
         if 'target_bins' in kwargs.keys() and 'target_values' in kwargs.keys() and 'target_errors' in kwargs.keys():
-            self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']]) #The user can select which bins they wish to be considered in the tuning
-            print(self.target_binidns)
+            #The user can select which bins they wish to be considered in the tuning
+            self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in kwargs['target_bins']]) 
             self.target_values = kwargs['target_values']
             self.target_error = kwargs['target_errors']
-        elif 'target_h5' in kwargs.keys() and 'target_binidns' in kwargs.keys():
-            self.target_binidns = kwargs['target_binidns']
+        elif 'target_h5' in kwargs.keys() and 'target_bins' in kwargs.keys():
+            #find target_binidns in fits index
             f = h5py.File(kwargs['target_h5'], "r")
-            self.target_values = jnp.array(f['main'][:,1], dtype=np.float64)[self.target_binidns]
-            self.target_error = jnp.array(f['main'][:,7], dtype=np.float64)[self.target_binidns]
+            target_binids = f['main'][:,0][kwargs['target_bins']]
+            #change format from target h5 to match h5 file from pythia
+            target_binids = [str(b,'utf8') for b in target_binids]
+            self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in target_binids])
+            self.target_values = jnp.array(f['main'][:,1], dtype=np.float64)[kwargs['target_bins']]
+            self.target_error = jnp.array(f['main'][:,7], dtype=np.float64)[kwargs['target_bins']]
 
         else:
             # use all target data in json
@@ -65,11 +69,12 @@ class Paramtune:
             self.target_values = jnp.array([target_data[k][0] for k in target_data])
             self.target_error = jnp.array([target_data[k][1] for k in target_data])
         
-        # Filter target data. Perhaps expand this to more than value 0, error 0?
+        # Filter out target data if value 0, error 0. Filter out if binidn is -1
         valid = []
-        for i, (value, error) in enumerate(zip(self.target_values, self.target_error)):
-            if not (value == 0 and error == 0):
+        for i, (binidn, value, error) in enumerate(zip(self.target_binidns, self.target_values, self.target_error)):
+            if not (value == 0 and error == 0) and binidn != -1:
                 valid.append(i)
+        
         self.target_binidns = jnp.take(self.target_binidns, jnp.array(valid))
         self.target_values = jnp.take(self.target_values, jnp.array(valid))
         self.target_error = jnp.take(self.target_error, jnp.array(valid))
@@ -116,7 +121,7 @@ class Paramtune:
         if method == 'sample_range':
             num_samples = 50
             #TODO: make sure 2043 seed okay before this goes to Cori
-            samples = jax.random.uniform(jax.random.PRNGKey(2403), (num_samples,self.fits.dim),\
+            samples = jax.random.uniform(jax.random.PRNGKey(2043), (num_samples,self.fits.dim),\
                 minval = self.fits.X.min(axis = 0), maxval = self.fits.X.max(axis = 0), dtype=jnp.float64)
             objective = jnp.apply_along_axis(self.objective, 1, samples, *self.obj_args)
             return samples[jnp.argmin(objective)]
@@ -187,8 +192,7 @@ class Paramtune:
             plt.figure()
             plt.title("chi2/ndf for " + str(num_samples) + " mc_run samples")
             plt.ylabel("Frequency")
-            plt.xlabel("chi/ndf")
-            plt.xscale('log')       
+            plt.xlabel("chi/ndf")  
         label = self.objective_name + ": {:.2f} +/- {:.2f}".format(jnp.mean(jnp.array(chi2ndf)), jnp.std(jnp.array(chi2ndf)))
         plt.hist(chi2ndf, bins = 'doane', label = label, range = graph_range, facecolor = color)
         plt.legend()
@@ -223,14 +227,15 @@ class Paramtune:
                 y = objective_x 
                 p = plt.plot(x, y, label = self.objective_name)
 
-            
-
-           
             plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
             within_error = jnp.where(y < target_dev)[0] # possibly vulnerable to local minima
-            low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
-            plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
-            label= "[{:.4f}, {:.4f}]".format(low_bound,high_bound))
+            if len(within_error) > 0:
+                low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
+                plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
+                label= "[{:.4f}, {:.4f}]".format(low_bound,high_bound))
+            else:
+                plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
+                label= "[N/A]")
             plt.legend()
             plt.title('Parameter regions within ' + str(std) + ' std of tuned result')
             plt.ylabel('Objective - Optimal objective')
@@ -265,9 +270,12 @@ class Paramtune:
     
     # probably don't call if there are more than 20 observables w/ target data
     def graph_envelope_target(self):
+        place = 0
         for obs_name in self.fits.obs_index.keys():
-            obs_bin_idns = jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name]))
-            if obs_bin_idns.size > 0:
+            target_bins = len(jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name])))
+            if target_bins > 0:
+                print(self.target_values[place:place+target_bins])
                 self.fits.graph_envelope([obs_name])
-                plt.stairs([self.target_values[b] for b in obs_bin_idns], range(len(obs_bin_idns) + 1), label = 'target')
+                plt.stairs(self.target_values[place:place+target_bins], range(target_bins + 1), label = 'target')
                 plt.legend()
+                place += target_bins

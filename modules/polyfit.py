@@ -115,7 +115,7 @@ class Polyfit:
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []
             for bin_count, bin_id in enumerate(self.bin_ids):
-                if 'num_bins' in kwargs.keys() and bin_count > kwargs['num_bins']:
+                if 'num_bins' in kwargs.keys() and bin_count >= kwargs['num_bins']:
                     break
                 print("\rFitting {:d} of {:d}: {:60s}".format(bin_count + 1, self.Y.shape[0], bin_id), end='')
                 
@@ -149,6 +149,7 @@ class Polyfit:
 
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
+                
             print("\r", end='')
             if save:
                 self.save(npz_file)
@@ -305,7 +306,12 @@ class Polyfit:
 
     def bin_idn(self, bin_id):
         # Convert bin_id in format bin_name#bin_number to binidn
-        return self.index[bin_id.split('#')[0]][int(bin_id.split('#')[1])]
+        bin_name = bin_id.split('#')[0]
+        bin_number = int(bin_id.split('#')[1])
+        if bin_name in self.index.keys() and len(self.index[bin_name]) > bin_number:
+            return self.index[bin_name][bin_number]
+        else:
+            return -1
     
     def numCoeffsPoly(self, dim, order):
         """
