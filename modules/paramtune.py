@@ -79,7 +79,7 @@ class Paramtune:
             self.objective_name ='no_err'
         if type(initial_guess) == str:
             initial_guess = self.calculate_initial(initial_guess)
-            print("Calculated inital guess: ", initial_guess) 
+            print("\nCalculated inital guess: ", initial_guess) 
         self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='TNC')
 
         # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],

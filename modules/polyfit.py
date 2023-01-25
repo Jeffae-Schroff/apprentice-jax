@@ -3,6 +3,7 @@ from matplotlib import pyplot as plt
 import jax
 import jax.numpy as jnp
 from jax.config import config
+import scipy.optimize as opt
 import numpy as np
 config.update('jax_enable_x64', True)
 config.update('jax_platform_name', 'cpu')
@@ -64,12 +65,18 @@ class Polyfit:
         Optional Keyword Arguments (use to create fits):
         input_h5 -- the name of an h5 file with MC run results
         order -- the order of polynomial to fit each bin with
+        reg_mode -- regression mode, default to lst_sq
         """
 
         if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
             self.has_cov = kwargs['covariance']
+            self.reg_mode = 'lst_sq'
+            self.reg_param = 0
+            if 'reg_mode' in kwargs.keys():
+                self.reg_mode = kwargs['reg_mode']
+                self.reg_param = kwargs['reg_param']
 
             f = h5py.File(self.input_h5, "r")
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
@@ -99,6 +106,7 @@ class Polyfit:
 
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []
+            debug=1 ##TODO: DELETE
             for bin_count, bin_id in enumerate(self.bin_ids):
                 if 'num_bins' in kwargs.keys() and bin_count > kwargs['num_bins']:
                     break
@@ -107,7 +115,14 @@ class Polyfit:
                 bin_Y = self.Y[self.bin_idn(bin_id),:]
                 
                 #polynomialapproximation.coeffsolve2 code
-                bin_p_coeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, bin_Y, rcond=None)
+                obj_args = (bin_Y, VM, self.reg_param)
+                if self.reg_mode == 'ridge':
+                    guess = jnp.zeros((VM.shape[1],), dtype=jnp.float32)
+                    c_opt = opt.minimize(self.ridge_obj, guess, args=obj_args, method='Nelder-Mead')
+                    bin_p_coeffs = c_opt.x
+                    bin_res = [jnp.sum(jnp.square(bin_Y-VM@bin_p_coeffs))]
+                else:
+                    bin_p_coeffs, bin_res, rank, s  = jnp.linalg.lstsq(VM, bin_Y, rcond=None)
 
                 surrogate_Y = self.surrogate(self.X, bin_p_coeffs)
                 bin_chi2 = jnp.sum(jnp.divide(jnp.power((bin_Y - surrogate_Y), 2), surrogate_Y))
@@ -119,17 +134,34 @@ class Polyfit:
                 #Calculating covariance of coefficients using inverse Hessian
                 def res_sq(coeff):
                     return jnp.sum(jnp.square(bin_Y-VM@coeff))
+                def ridge(coeff):
+                    return self.ridge_obj(coeff, bin_Y, VM, self.reg_param)
                 def Hessian(func):
                     return jax.jacfwd(jax.jacrev(func))
                 #polynomialapproximation.fit code
                 if self.has_cov:
-                    cov = jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs))
-                    fac = bin_res / (VM.shape[0]-VM.shape[1])
-                    self.cov.append(cov*fac)
+                    if self.reg_mode == 'ridge':
+                        pcov = jnp.linalg.inv(Hessian(ridge)(bin_p_coeffs))
+                    else:
+                        pcov = jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs))
+                    fac = bin_res[0] / (VM.shape[0]-VM.shape[1])
+                    self.cov.append(pcov*fac)
 
                     # #Old code!
-                    # cov = np.linalg.inv(VM.T@VM)
-                    # fac = bin_res / (VM.shape[0]-VM.shape[1])
+                    """cov = np.linalg.inv(VM.T@VM)
+                    fac = bin_res / (VM.shape[0]-VM.shape[1])"""
+                    if debug==1:
+                        print("\nScaling factor in polyfit: ", fac)
+                        
+    
+                        with jnp.printoptions(precision=3, linewidth=1000, suppress=True, floatmode="fixed"):
+                            print("Y: ", bin_Y)
+                            print("bin_p_coeff: ", bin_p_coeffs)
+                            print("\nVM matrix: \n", VM)
+                            print("\nInverse Hessian of lst_sq: \n ", jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs)))
+                            print("\nInverse Hessian of ridge: \n ", jnp.linalg.inv(Hessian(ridge)(bin_p_coeffs)))
+                            jnp.save('polyfit_inv_hess_lst_sq', jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs)))
+                        debug=0
                     # self.cov.append(cov*fac)
 
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
@@ -331,3 +363,13 @@ class Polyfit:
         return x
 
 
+
+    #NEW OBJECTIVE FUNCTIONS: RIDGE/LASSO
+    #coeff: coefficients of polynomial
+    #target: y-values given in data
+    #VM: terms of polynomial given by vandermonde_jax
+    #alpha: ridge parameter
+    def ridge_obj(self, coeff, target, VM, alpha):
+        res_sq = jnp.sum(jnp.square(target - VM@coeff))
+        penalty = alpha*(coeff@coeff)
+        return res_sq + penalty
