@@ -1,3 +1,4 @@
+import random
 import h5py
 from matplotlib import pyplot as plt
 import jax
@@ -51,15 +52,17 @@ class Polyfit:
     """
 
 
-    def __init__(self, npz_file, **kwargs):
+    def __init__(self, npz_file, sample = None, save = True, **kwargs):
         """ 
         If 'input_h5' are 'order' are given, fit polynomials of order order to each bin in input_h5,
         
         If 'input_h5' and 'order' are not given, 
-        The pceoff, chi2res dicts have the binids as keys with leading '\' characters stripped.
+        Load object from npz file
 
-        Mandatory arguments:
-        npz_file -- filepath for npz file storing results
+        Mandatory Arguments:
+        npz_file -- filepath for npz file storing results. None->don't save
+        Optional Arguments:
+        sample -- if a number, sample this many mc runs to use in fit.
         Keyword Arguments:
         covariance -- whether or not to create covariance matrix. permanent for this object
         Optional Keyword Arguments (use to create fits):
@@ -67,7 +70,6 @@ class Polyfit:
         order -- the order of polynomial to fit each bin with
         reg_mode -- regression mode, default to lst_sq
         """
-
         if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
@@ -82,35 +84,48 @@ class Polyfit:
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
             self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
             self.bin_ids = np.array([x.decode() for x in f.get("index")[:]])
-            #filter out bins with invalid value for any mc_run
+            self.dim = self.X.shape[1]
+            self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
+
+            #filter out bins with invalid value (>1000) for any mc_run
             invalid = jnp.array(jnp.any(abs(self.Y[:,:]) > 1000, axis = 1).nonzero()[0])
-            print("Filtering", len(invalid), "bins for invalid input")
+            if len(invalid) > 0:
+                print("Filtered", len(invalid), "of", len(self.bin_ids), "total bins for invalid input")
             self.Y = jnp.delete(self.Y, invalid, axis=0)
             self.bin_ids = np.delete(self.bin_ids, invalid)
+
+            #sample mc_runs. Number of used bins is consistent (we just filtered bins).
+            if not sample is None:                                         #(num MC runs)
+                if type(sample) is int and sample > self.dim and sample <= self.X.shape[0]:
+                    #TODO: Cori-proof
+                    random.seed()
+                    sample_which = jnp.array(random.sample(range(self.X.shape[0]), sample))
+                    self.X = jnp.take(self.X, sample_which, axis=0)
+                    self.Y = jnp.take(self.Y, sample_which, axis=1)
+                else:
+                    print("check sample input")
             
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
             # If bin not a key in index yet, start a new list as its value. Append count to bin's value. 
             [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]            
-            # keys observable names to their error bin names
+            # keys observable names to their error names
             self.obs_index = {}
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
-            self.dim = self.X.shape[1]
-            self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
-            VM = self.vandermonde_jax(self.X, self.order)
+            
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
             #TODO: make uncertainty symmetric if we can't do asymmetric
-
+            VM = self.vandermonde_jax(self.X, self.order)
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []
             debug=1 ##TODO: DELETE
             for bin_count, bin_id in enumerate(self.bin_ids):
-                if 'num_bins' in kwargs.keys() and bin_count > kwargs['num_bins']:
+                if 'num_bins' in kwargs.keys() and bin_count >= kwargs['num_bins']:
                     break
-                print("\rFitting {:d} of {:d}: {:60s}".format(bin_count, self.Y.shape[0], bin_id), end='')
+                print("\rFitting {:d} of {:d}: {:60s}".format(bin_count + 1, self.Y.shape[0], bin_id), end='')
                 
                 bin_Y = self.Y[self.bin_idn(bin_id),:]
                 
@@ -166,9 +181,12 @@ class Polyfit:
 
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
-            self.save(npz_file)
+                
+            print("\r", end='')
+            if save:
+                self.save(npz_file)
 
-        #Initialize with all attributes empty
+        #Initialize from npz file
         elif 'covariance' in kwargs.keys():
             self.has_cov = kwargs['covariance']
             self.merge(npz_file, new = True)
@@ -179,20 +197,23 @@ class Polyfit:
         """ Merge new data to existing class variables.
         For now, if new data has same bin ids as old data, both copies are kept.
         """
-        all_dict = jnp.load(all_npz, allow_pickle=True)
-        if new:
-            self.order, self.dim = all_dict['order'], all_dict['dim']
-        elif self.order != all_dict['order'] or self.dim != all_dict['dim']:
-            print("merging data with different order/dim is not allowed(error)")
-        self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
-
-        jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']
-        if self.has_cov: jnp_vars.append('cov')
-        for str in jnp_vars: #jnp: numbers only
+        if all_npz is None:
+             all_dict = {}
+        else:
+            all_dict = jnp.load(all_npz, allow_pickle=True)
             if new:
-                setattr(self, str, jnp.array(all_dict[str]))
-            else:
-                setattr(self, str, jnp.concatenate([getattr(self, str), all_dict[str]]))
+                self.order, self.dim = all_dict['order'], all_dict['dim']
+            elif self.order != all_dict['order'] or self.dim != all_dict['dim']:
+                print("merging data with different order/dim is not allowed(error)")
+            self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
+
+            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']
+            if self.has_cov: jnp_vars.append('cov')
+            for str in jnp_vars: #jnp: numbers only
+                if new:
+                    setattr(self, str, jnp.array(all_dict[str]))
+                else:
+                    setattr(self, str, jnp.concatenate([getattr(self, str), all_dict[str]]))
         
         # We recalculate index, obs_index from bin_ids. I decided to just store bin_ids because 
         # 1. npz likes np lists only and
@@ -228,7 +249,7 @@ class Polyfit:
         plt.ylabel("Values")
         plt.xlabel("MC runs")
         edges = range(self.X.shape[0] + 1)
-        plt.stairs([y for y in self.Y[self.fits.bin_idn(bin_id), :]], edges, label = 'Target Data')
+        plt.stairs([y for y in self.Y[self.bin_idn(bin_id), :]], edges, label = 'Target Data')
         surrogate, chi2, res, cov = self.get_surrogate_func(bin_id)
         surrogate_y = surrogate(self.X)
         plt.stairs(surrogate_y, edges, label = 'Surrogate(Tuned Parameters)')
@@ -317,7 +338,12 @@ class Polyfit:
 
     def bin_idn(self, bin_id):
         # Convert bin_id in format bin_name#bin_number to binidn
-        return self.index[bin_id.split('#')[0]][int(bin_id.split('#')[1])]
+        bin_name = bin_id.split('#')[0]
+        bin_number = int(bin_id.split('#')[1])
+        if bin_name in self.index.keys() and len(self.index[bin_name]) > bin_number:
+            return self.index[bin_name][bin_number]
+        else:
+            return -1
     
     def numCoeffsPoly(self, dim, order):
         """
