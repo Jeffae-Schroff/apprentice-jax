@@ -1,19 +1,20 @@
 import random
 import h5py
 from matplotlib import pyplot as plt
+import scipy.optimize as opt
+import numpy as np
+from functools import partial
 import jax
 import jax.numpy as jnp
 from jax.config import config
-import scipy.optimize as opt
-import numpy as np
-config.update('jax_enable_x64', True)
-config.update('jax_platform_name', 'cpu')
-from functools import partial
+
+
 
 
 """
 
 """
+
 class Polyfit:
     """
     Inner loop optimization.
@@ -52,11 +53,11 @@ class Polyfit:
     """
 
 
-    def __init__(self, npz_file, sample = None, save = True, **kwargs):
+    def __init__(self, npz_file, sample = None, **kwargs):
         """ 
         If 'input_h5' are 'order' are given, fit polynomials of order order to each bin in input_h5,
         
-        If 'input_h5' and 'order' are not given, 
+        If 'input_h5' and 'order' are not given,
         Load object from npz file
 
         Mandatory Arguments:
@@ -71,6 +72,11 @@ class Polyfit:
         reg_mode -- regression mode, default to lst_sq
         """
         if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
+            # jax.config.update('jax_platform_name', 'cpu')
+            # before execute any computation / allocation
+            print(jax.numpy.ones(3).device()) # TFRT_CPU_0
+            print(jax.process_index())
+
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
             self.has_cov = kwargs['covariance']
@@ -103,7 +109,7 @@ class Polyfit:
                     self.X = jnp.take(self.X, sample_which, axis=0)
                     self.Y = jnp.take(self.Y, sample_which, axis=1)
                 else:
-                    print("check sample input")
+                    print("invalid sample input")
             
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
@@ -121,7 +127,7 @@ class Polyfit:
             VM = self.vandermonde_jax(self.X, self.order)
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []
-            debug=1 ##TODO: DELETE
+            debug=0 ##TODO: DELETE
             for bin_count, bin_id in enumerate(self.bin_ids):
                 if 'num_bins' in kwargs.keys() and bin_count >= kwargs['num_bins']:
                     break
@@ -181,13 +187,13 @@ class Polyfit:
 
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
-                
-            print("\r", end='')
-            if save:
+            print("\nFits written to ", npz_file)
+            if npz_file is not None:
                 self.save(npz_file)
 
         #Initialize from npz file
         elif 'covariance' in kwargs.keys():
+            print("loading ", npz_file)
             self.has_cov = kwargs['covariance']
             self.merge(npz_file, new = True)
         else:
