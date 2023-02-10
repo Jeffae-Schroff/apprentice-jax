@@ -1,0 +1,20 @@
+from modules.paramtune import Paramtune
+import optparse
+
+# python3 app-tune dummy_data/fits.npz 'dummy_data/target_data.json' --computecov
+if __name__ == "__main__":
+    #create Polyfit object from command line
+    op = optparse.OptionParser(usage=__doc__)
+
+    op.add_option("--initial", dest="initial_guess", type=int, default=None, help="how to find scipy.optimize initial guess")
+    op.add_option("--computecov", dest = "covariance", help='use covariance', action='store_true', default = False)
+    
+    opts, args = op.parse_args()
+
+    kwargs = {}
+    for option in ["initial_guess", "covariance"]:
+        if hasattr(opts, option):
+            kwargs[option] = getattr(opts, option)
+    npz_file = args[0]
+    target_file = args[1]
+    p = Paramtune(npz_file, target_file, **kwargs)

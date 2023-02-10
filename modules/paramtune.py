@@ -1,12 +1,16 @@
-import jax
 import numpy as np
-import jax.numpy as jnp
 import scipy.optimize as opt
 from scipy.stats import chi2
 import matplotlib.pyplot as plt
 from modules.polyfit import Polyfit
 import json
 import h5py
+import jax
+import jax.numpy as jnp
+from jax.config import config
+config.update('jax_enable_x64', True)
+config.update('jax_platform_name', 'cpu')
+
 
 """
         TODO: Convert documentation to actual doc using str.__doc__
@@ -42,9 +46,8 @@ class Paramtune:
 
     """
 
-    def __init__(self, npz_file, target_file, initial_guess = 'sample_range', tune = True, **kwargs):
-        self.fits = Polyfit(npz_file, **kwargs)
-        self.tune = tune
+    def __init__(self, npz_file, target_file, initial_guess = 'sample_range', **kwargs):
+        self.fits = Polyfit(npz_file, covariance = kwargs['covariance'])
         file_ending = target_file.split('.')[-1]
         if file_ending == "h5":
             f = h5py.File(target_file, "r")
@@ -89,30 +92,35 @@ class Paramtune:
             self.objective_name ='no_err'
         
         self.ndf = len(self.target_binidns) - self.fits.dim
-        if tune:
-            if type(initial_guess) == str:
-                initial_guess = self.calculate_initial(initial_guess)
-                print("Calculated inital guess: ", initial_guess) 
-            self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='TNC')
 
-            # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],
-            # args = self.obj_args, method='TNC',tol=1e-6, options={'maxiter':1000, 'accuracy':1e-6})
-            # temp to match apprentice.
-            
+        if initial_guess is None:
+            initial_guess = 'sample_range'
+        if type(initial_guess) == str:
+            initial_guess = self.calculate_initial(initial_guess)
+            print("Calculated inital guess: ", initial_guess) 
+        else:
+            print("error in inital guess") 
+            return
+        self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='TNC')
 
-            opt_obj = self.objective(self.p_opt.x, *self.obj_args)
-            print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
+        # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],
+        # args = self.obj_args, method='TNC',tol=1e-6, options={'maxiter':1000, 'accuracy':1e-6})
+        # temp to match apprentice.
+        
 
-            #Calculating covariance of parameters by means of inverse Hessian
-            
-            def obj_mini(param):
-                return self.objective(param, *self.obj_args)
-            def Hessian(func):
-                return jax.jacfwd(jax.jacrev(obj_mini))
-            cov = jnp.linalg.inv(Hessian(obj_mini)(self.p_opt.x))
-            fac = obj_mini(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
-            self.cov = cov*fac
-            print("Covariance of Tuned Parameters: ", cov*fac)
+        opt_obj = self.objective(self.p_opt.x, *self.obj_args)
+        print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
+
+        #Calculating covariance of parameters by means of inverse Hessian
+        coeff_target_bins = jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0)
+        def obj_mini(param):
+            return self.objective(param, *self.obj_args)
+        def Hessian(func):
+            return jax.jacfwd(jax.jacrev(obj_mini))
+        cov = jnp.linalg.inv(Hessian(obj_mini)(self.p_opt.x))
+        fac = obj_mini(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
+        self.cov = cov*fac
+        print("Covariance of Tuned Parameters: ", cov*fac)
 
     def calculate_initial(self, method):
         #takes guess in param range with smallest objective.
@@ -219,14 +227,10 @@ class Paramtune:
                 x = jnp.arange(graph_range[0], graph_range[1], (graph_range[1]-graph_range[0])/graph_density)
 
             objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
-            if self.tune:
-                objective_opt = self.objective(self.p_opt.x, *self.obj_args)
-                y = objective_x - objective_opt
-                p = plt.plot(x, y, label = self.objective_name)
-                plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
-            else:
-                y = objective_x 
-                p = plt.plot(x, y, label = self.objective_name)
+            objective_opt = self.objective(self.p_opt.x, *self.obj_args)
+            y = objective_x - objective_opt
+            p = plt.plot(x, y, label = self.objective_name)
+            plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
 
             plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
             within_error = jnp.where(y < target_dev)[0] # possibly vulnerable to local minima
