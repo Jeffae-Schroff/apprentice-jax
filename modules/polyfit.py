@@ -121,7 +121,7 @@ class Polyfit:
             VM = self.vandermonde_jax(self.X, self.order)
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []
-            debug=1 ##TODO: DELETE
+            debug=0 ##TODO: DELETE
             for bin_count, bin_id in enumerate(self.bin_ids):
                 if 'num_bins' in kwargs.keys() and bin_count >= kwargs['num_bins']:
                     break

@@ -104,14 +104,13 @@ class Paramtune:
             print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
 
             #Calculating covariance of parameters by means of inverse Hessian
-            coeff_target_bins = jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0)
-            def res_sq(param):
-                poly = jnp.asarray(self.fits.vandermonde_jax([param], self.fits.order)[0])
-                return jnp.sum(jnp.square(coeff_target_bins@poly - jnp.asarray(self.target_values)))
+            
+            def obj_mini(param):
+                return self.objective(param, *self.obj_args)
             def Hessian(func):
-                return jax.jacfwd(jax.jacrev(res_sq))
-            cov = jnp.linalg.inv(Hessian(res_sq)(self.p_opt.x))
-            fac = res_sq(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
+                return jax.jacfwd(jax.jacrev(obj_mini))
+            cov = jnp.linalg.inv(Hessian(obj_mini)(self.p_opt.x))
+            fac = obj_mini(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
             self.cov = cov*fac
             print("Covariance of Tuned Parameters: ", cov*fac)
 
