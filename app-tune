@@ -1,20 +1,20 @@
 from modules.paramtune import Paramtune
-import optparse
+import argparse
 
-# python3 app-tune dummy_data/fits.npz 'dummy_data/target_data.json' --computecov
+# python3 app-tune dummy_data/fits.npz 'dummy_data/target_data.json' --computecov --cpu
 if __name__ == "__main__":
     #create Polyfit object from command line
-    op = optparse.OptionParser(usage=__doc__)
-
-    op.add_option("--initial", dest="initial_guess", type=int, default=None, help="how to find scipy.optimize initial guess")
-    op.add_option("--computecov", dest = "covariance", help='use covariance', action='store_true', default = False)
-    op.add_option("--cpu", dest = "cpu", help='use cpu?', action='store_true')
-    opts, args = op.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("npz_file", help="location of fits file", type=str)
+    parser.add_argument("target_file", help="location of target file", type=str)
+    parser.add_argument("--initial", dest="initial_guess", type=int, default=None, help="how to find scipy.optimize initial guess")
+    parser.add_argument("--computecov", dest = "covariance", help='use covariance', action='store_true', default = False)
+    parser.add_argument("--cpu", dest = "cpu", help='use cpu?', action='store_true')
+    parser.add_argument('--target_bins', action='store', type=int, nargs='*')
+    args = parser.parse_args()
 
     kwargs = {}
-    for option in ["initial_guess", "covariance", "cpu"]:
-        if hasattr(opts, option):
-            kwargs[option] = getattr(opts, option)
-    npz_file = args[0]
-    target_file = args[1]
-    p = Paramtune(npz_file, target_file, **kwargs)
+    for option in ["initial_guess", "covariance", "target_bins", "cpu"]:
+        if hasattr(args, option):
+            kwargs[option] = getattr(args, option)
+    p = Paramtune(args.npz_file, args.target_file, **kwargs)

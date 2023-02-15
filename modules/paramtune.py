@@ -104,7 +104,9 @@ class Paramtune:
         else:
             print("error in inital guess") 
             return
-        self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='TNC')
+
+        bounds = jnp.column_stack((self.fits.X.min(axis = 0),self.fits.X.max(axis = 0)))
+        self.p_opt = opt.minimize(self.objective, initial_guess, bounds = bounds, args = self.obj_args, method='TNC')
 
         # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],
         # args = self.obj_args, method='TNC',tol=1e-6, options={'maxiter':1000, 'accuracy':1e-6})
@@ -214,7 +216,7 @@ class Paramtune:
 
     #TODO: Record param name(s) so this can take param name(s) and visualize that param
     # It's in attributes of the param table of h5, so polyfit needs to be changed too
-    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None):
+    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = True):
         std = 1
         confidence_level = 0.68268949 * std #within 1 standard deviation
         edof = dof_scale*(self.ndf)
@@ -247,9 +249,8 @@ class Paramtune:
             plt.legend()
             plt.title('Parameter regions within ' + str(std) + ' std of tuned result')
             plt.ylabel('Objective - Optimal objective')
-            plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic
-            #use logscale if the graph is really spiky
-            if(max(y) > target_dev*200): 
+            plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic w/ update to Harvey's h5
+            if log_scale: 
                 plt.yscale("log")
         else:
             print("not implemented")

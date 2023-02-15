@@ -1,23 +1,23 @@
 from modules.polyfit import Polyfit
-import optparse
+import argparse
 
-# python3 app-build --npzfile dummy_data/fits.npz --input_h5 dummy_data/inputdata.h5 --order 3 --computecov
+# python3 app-build dummy_data/fits.npz --input_h5 dummy_data/inputdata.h5 --order 3 --computecov --cpu
 if __name__ == "__main__":
     #create Polyfit object from command line
-    op = optparse.OptionParser(usage=__doc__)
-
-    op.add_option("--npzfile", dest = "npzfile", help="ends with .npz")
-    op.add_option("--computecov", dest = "covariance", help='find covariance in fit', action='store_true', default = False)
-    op.add_option("--sample", dest="sample", type=int, default=None, help="Number of runs to sample")
-    op.add_option("--input_h5", dest = "input_h5", default=None, help="h5 file with input")
-    op.add_option("--order", dest="order", type=int, default=None, help="Polynomial order of numerator")
-    op.add_option("--regmode", dest = "regmode", default=None, help="regression type")
-    op.add_option("--regparam", dest = "regparam", default=None, help="reg param")
-    op.add_option("--cpu", dest = "cpu", help='use cpu?', action='store_true')
-    opts, args = op.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("npz_file", help="ends with .npz", type=str)
+    parser.add_argument("--computecov", dest = "covariance", help='find covariance in fit', action='store_true', default = False)
+    parser.add_argument("--sample", dest="sample", type=int, default=None, help="Number of runs to sample")
+    parser.add_argument("--input_h5", dest = "input_h5", default=None, help="h5 file with input")
+    parser.add_argument("--order", dest="order", type=int, default=None, help="Polynomial order of numerator")
+    parser.add_argument("--regmode", dest = "regmode", default=None, help="regression type")
+    parser.add_argument("--regparam", dest = "regparam", default=None, help="reg param")
+    parser.add_argument('--fit_obs', action='store', type=int, nargs='*')
+    parser.add_argument("--cpu", dest = "cpu", help='use cpu?', action='store_true')
+    args = parser.parse_args()
 
     kwargs = {}
-    for option in ["sample", "input_h5", "order", "regmode", "regparam","cpu"]:
-        if hasattr(opts, option):
-            kwargs[option] = getattr(opts, option)
-    p = Polyfit(opts.npzfile, covariance = opts.covariance, **kwargs)
+    for option in ["sample", "input_h5", "order", "regmode", "regparam","fit_obs","cpu"]:
+        if hasattr(args, option):
+            kwargs[option] = getattr(args, option)
+    p = Polyfit(args.npz_file, covariance = args.covariance, **kwargs)
