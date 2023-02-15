@@ -7,7 +7,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax.config import config
-
+jax.config.update("jax_enable_x64", True)
 
 
 
@@ -71,12 +71,10 @@ class Polyfit:
         order -- the order of polynomial to fit each bin with
         reg_mode -- regression mode, default to lst_sq
         """
-        if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
-            # jax.config.update('jax_platform_name', 'cpu')
-            # before execute any computation / allocation
-            print(jax.numpy.ones(3).device()) # TFRT_CPU_0
-            print(jax.process_index())
 
+        if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
+            if 'cpu' in kwargs.keys() and kwargs['cpu']:
+                config.update('jax_platform_name', 'cpu')
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
             self.has_cov = kwargs['covariance']
@@ -99,6 +97,17 @@ class Polyfit:
                 print("Filtered", len(invalid), "of", len(self.bin_ids), "total bins for invalid input")
             self.Y = jnp.delete(self.Y, invalid, axis=0)
             self.bin_ids = np.delete(self.bin_ids, invalid)
+            
+            # If fit_obs is in arugments, it is a list of which observables to use (by order in the input file)
+            if 'fit_obs' in kwargs.keys():
+                #Won't truncate e.g. d100, but will add leading zeroes to single digits to match pythia (?) format
+                fit_obs = ['d' + str(obs).zfill(2) + '-' for obs in kwargs['fit_obs']]
+                print("Choosing to fit observables with", fit_obs)
+
+                #filter out bins with name that does not match fit_obs
+                invalid = jnp.array([i for i, bin in enumerate(self.bin_ids) if not any([obs in bin for obs in fit_obs])])
+                self.Y = jnp.delete(self.Y, invalid, axis=0)
+                self.bin_ids = np.delete(self.bin_ids, invalid)
 
             #sample mc_runs. Number of used bins is consistent (we just filtered bins).
             if not sample is None:                                         #(num MC runs)
@@ -114,23 +123,21 @@ class Polyfit:
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
             # If bin not a key in index yet, start a new list as its value. Append count to bin's value. 
-            [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]            
+            [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]  
             # keys observable names to their error names
             self.obs_index = {}
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
-            
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
-            #TODO: make uncertainty symmetric if we can't do asymmetric
+            #TODO: consider use for asymmetric uncertainty
             VM = self.vandermonde_jax(self.X, self.order)
             self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []
+
             debug=0 ##TODO: DELETE
             for bin_count, bin_id in enumerate(self.bin_ids):
-                if 'num_bins' in kwargs.keys() and bin_count >= kwargs['num_bins']:
-                    break
                 print("\rFitting {:d} of {:d}: {:60s}".format(bin_count + 1, self.Y.shape[0], bin_id), end='')
                 
                 bin_Y = self.Y[self.bin_idn(bin_id),:]
@@ -187,7 +194,7 @@ class Polyfit:
 
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
-            print("\nFits written to ", npz_file)
+            print("\nFits written to", npz_file)
             if npz_file is not None:
                 self.save(npz_file)
 

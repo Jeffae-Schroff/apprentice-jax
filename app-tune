@@ -8,11 +8,11 @@ if __name__ == "__main__":
 
     op.add_option("--initial", dest="initial_guess", type=int, default=None, help="how to find scipy.optimize initial guess")
     op.add_option("--computecov", dest = "covariance", help='use covariance', action='store_true', default = False)
-    
+    op.add_option("--cpu", dest = "cpu", help='use cpu?', action='store_true')
     opts, args = op.parse_args()
 
     kwargs = {}
-    for option in ["initial_guess", "covariance"]:
+    for option in ["initial_guess", "covariance", "cpu"]:
         if hasattr(opts, option):
             kwargs[option] = getattr(opts, option)
     npz_file = args[0]

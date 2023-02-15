@@ -13,10 +13,11 @@ if __name__ == "__main__":
     op.add_option("--order", dest="order", type=int, default=None, help="Polynomial order of numerator")
     op.add_option("--regmode", dest = "regmode", default=None, help="regression type")
     op.add_option("--regparam", dest = "regparam", default=None, help="reg param")
+    op.add_option("--cpu", dest = "cpu", help='use cpu?', action='store_true')
     opts, args = op.parse_args()
 
     kwargs = {}
-    for option in ["sample", "input_h5", "order", "regmode", "regparam"]:
+    for option in ["sample", "input_h5", "order", "regmode", "regparam","cpu"]:
         if hasattr(opts, option):
             kwargs[option] = getattr(opts, option)
     p = Polyfit(opts.npzfile, covariance = opts.covariance, **kwargs)
