@@ -89,15 +89,17 @@ class Polyfit:
             f = h5py.File(self.input_h5, "r")
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
             self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
+            self.Y_err = jnp.array(f['errors'][:], dtype=jnp.float64)
             self.bin_ids = np.array([x.decode() for x in f.get("index")[:]])
             self.dim = self.X.shape[1]
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
 
             #filter out bins with invalid value (>1000) for any mc_run
-            invalid = jnp.array(jnp.any(abs(self.Y[:,:]) > 1000, axis = 1).nonzero()[0])
+            invalid = jnp.array(jnp.any((abs(self.Y[:,:]) > 1000)|(self.Y_err[:,:] == 0.0), axis = 1).nonzero()[0])
             if len(invalid) > 0:
                 print("Filtered", len(invalid), "of", len(self.bin_ids), "total bins for invalid input")
             self.Y = jnp.delete(self.Y, invalid, axis=0)
+            self.Y_err = jnp.delete(self.Y_err, invalid, axis=0)
             self.bin_ids = np.delete(self.bin_ids, invalid)
 
             #sample mc_runs. Number of used bins is consistent (we just filtered bins).
@@ -125,7 +127,7 @@ class Polyfit:
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
             #TODO: make uncertainty symmetric if we can't do asymmetric
             VM = self.vandermonde_jax(self.X, self.order)
-            self.p_coeffs, self.chi2ndf, self.res = [],[],[]
+            self.p_coeffs, self.p_coeffs_err, self.chi2ndf, self.res = [],[],[],[]
             if self.has_cov: self.cov = []
             debug=0 ##TODO: DELETE
             for bin_count, bin_id in enumerate(self.bin_ids):
@@ -134,9 +136,10 @@ class Polyfit:
                 print("\rFitting {:d} of {:d}: {:60s}".format(bin_count + 1, self.Y.shape[0], bin_id), end='')
                 
                 bin_Y = self.Y[self.bin_idn(bin_id),:]
-                
+                bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
+
                 #polynomialapproximation.coeffsolve2 code
-                obj_args = (bin_Y, VM, self.reg_param)
+                obj_args = (bin_Y, bin_Y_err, VM, self.reg_param)
                 if self.reg_mode == 'ridge':
                     guess = jnp.zeros((VM.shape[1],), dtype=jnp.float32)
                     c_opt = opt.minimize(self.ridge_obj, guess, args=obj_args, method='Nelder-Mead')
@@ -156,7 +159,7 @@ class Polyfit:
                 def res_sq(coeff):
                     return jnp.sum(jnp.square(bin_Y-VM@coeff))
                 def ridge(coeff):
-                    return self.ridge_obj(coeff, bin_Y, VM, self.reg_param)
+                    return self.ridge_obj(coeff, bin_Y, bin_Y_err, VM, self.reg_param)
                 def Hessian(func):
                     return jax.jacfwd(jax.jacrev(func))
                 #polynomialapproximation.fit code
@@ -401,7 +404,7 @@ class Polyfit:
     #target: y-values given in data
     #VM: terms of polynomial given by vandermonde_jax
     #alpha: ridge parameter
-    def ridge_obj(self, coeff, target, VM, alpha):
-        res_sq = jnp.sum(jnp.square(target - VM@coeff))
+    def ridge_obj(self, coeff, target, target_err, VM, alpha):
+        w_res_sq = jnp.sum(jnp.square((target - VM@coeff)/target_err))
         penalty = alpha*(coeff@coeff)
-        return res_sq + penalty
+        return w_res_sq + penalty
