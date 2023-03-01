@@ -3,6 +3,7 @@ import scipy.optimize as opt
 from scipy.stats import chi2
 import matplotlib.pyplot as plt
 from modules.polyfit import Polyfit
+from itertools import product
 import json
 import h5py
 import jax
@@ -216,9 +217,9 @@ class Paramtune:
 
     #TODO: Record param name(s) so this can take param name(s) and visualize that param
     # It's in attributes of the param table of h5, so polyfit needs to be changed too
-    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = True):
+    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = False):
         std = 1
-        confidence_level = 0.68268949 * std #within 1 standard deviation
+        confidence_level = 0.68268949 #within 1 standard deviation
         edof = dof_scale*(self.ndf)
         target_dev = chi2.ppf(confidence_level, edof)
         print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
@@ -252,32 +253,63 @@ class Paramtune:
             plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic w/ update to Harvey's h5
             if log_scale: 
                 plt.yscale("log")
+            else:
+                plt.ylim((0, 200))
         else:
             print("not implemented")
         if not graph_file == None:
             plt.savefig(graph_file)
 
-    def graph_tune(self, obs_name, graph_file = None):
+    def graph_tune(self, obs_name, graph_file = None, new_figure = True, ylim = None):
         #only select binids from obs_name for which there is target data
         obs_bin_idns = jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name]))
         poly_opt = self.fits.vandermonde_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
-        plt.figure()
-        plt.title("Placeholder")
-        #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
-        plt.ylabel("Placeholder")
-        plt.xlabel(obs_name + " bins")
+        target_y = [self.target_values[jnp.where(self.target_binidns == b)[0][0]] for b in obs_bin_idns]
+
+        if new_figure: 
+            plt.title("Tune of " + obs_name)
+            plt.figure()
+            #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
+            plt.ylabel("Placeholder")
+            plt.xlabel(obs_name + " bins")
+        
         num_bins = len(obs_bin_idns)
         num_ticks = 7 if num_bins > 14 else num_bins #make whole numbers
         plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
+        if ylim:
+            plt.ylim(ylim)
+
         edges = range(num_bins + 1)
-        plt.stairs([self.target_values[b] for b in obs_bin_idns], edges, label = 'Target Data')
-        plt.stairs(tuned_y, edges, label = 'Surrogate(Tuned Parameters)')
+        plt.stairs(target_y, edges, label = 'Target Data')
+        plt.stairs(tuned_y, edges, label = 'Surrogate(P_opt)')
+        if new_figure:
+            plt.legend()
         
-        plt.legend()
         if not graph_file == None: plt.savefig(graph_file)
     
-    # probably don't call if there are more than 20 observables w/ target data
+    def graph_tune_all(self, save_folder = None):
+        to_graph = []
+        for obs_name in self.fits.obs_index.keys():
+            target_bins = len(jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name])))
+            if target_bins > 0:
+                to_graph.append(obs_name)
+        subplot_width = np.ceil(np.sqrt(len(to_graph)+1)).astype(int)
+        fig, ax = plt.subplots(subplot_width, subplot_width)
+        fig.tight_layout()
+        for obs_name, i in zip(to_graph, range(1,len(to_graph)+1)):
+            plt.rcParams['axes.titlesize'] = 8
+            plt.subplot(subplot_width,subplot_width,i,title=obs_name.split('/')[-1])
+            self.graph_tune(obs_name, new_figure = False, ylim = [0, jnp.max(self.target_values)*1.1])
+        plt.subplot(subplot_width,subplot_width,subplot_width**2,title='legend',frame_on=False)
+        plt.plot(0, 0, label = 'Target Data')
+        plt.plot(0, 0, label = 'Surrogate(P_opt)')
+        plt.xticks([])
+        plt.yticks([])
+        plt.legend(fontsize=8)
+
+
+    # probably don't call if there are many observables w/ target data
     def graph_envelope_target(self, save_folder = None):
         place = 0
         for obs_name in self.fits.obs_index.keys():

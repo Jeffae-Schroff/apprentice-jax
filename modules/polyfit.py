@@ -110,6 +110,8 @@ class Polyfit:
                 invalid = jnp.array([i for i, bin in enumerate(self.bin_ids) if not any([obs in bin for obs in fit_obs])])
                 self.Y = jnp.delete(self.Y, invalid, axis=0)
                 self.bin_ids = np.delete(self.bin_ids, invalid)
+            
+            #remove a column from the fit data for new experiment
 
             #sample mc_runs. Number of used bins is consistent (we just filtered bins).
             if not sample is None:                                         #(num MC runs)
