@@ -18,3 +18,11 @@ if __name__ == "__main__":
     npz_file = args[0]
     target_file = args[1]
     p = Paramtune(npz_file, target_file, **kwargs)
+
+
+
+
+    #python3 app-build --npzfile summer_data/fits.npz --input_h5 summer_data/inputdata.h5 --order 6 --computecov --reg_mode ridge_w --reg_param 0.01 --cpu --num_bins 1000
+
+
+    #python3 app-tune summer_data/fits.npz 'summer_data/HEPData-ins1736531-v1-csv.h5' --computecov
