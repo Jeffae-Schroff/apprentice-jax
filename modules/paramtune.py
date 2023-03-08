@@ -38,6 +38,8 @@ class Paramtune:
         The output of the optimization. Use p_opt.x to obtain tuned parameters.
     cov : 
         Covariance matrix associated with the tuned parameters.
+    mc_target :
+        run number, Do tune on the mc_run specified in self.fits
 
 
     Methods
@@ -53,13 +55,21 @@ class Paramtune:
         if file_ending == "h5":
             f = h5py.File(target_file, "r")
             # target_bins specifies which bins to tune on
+            if 'mc_target' in kwargs.keys():
+                vals = self.fits.mc_target
+                errs = self.fits.mc_target_err
+            else: 
+                vals = f['main'][:,1]
+                errs = f['main'][:,4]
+            print(vals.shape, errs.shape)
             if 'target_bins' in kwargs.keys():
-                self.target_values = jnp.array(f['main'][kwargs['target_bins'],1], dtype=np.float64)
-                self.target_error = jnp.array(f['main'][kwargs['target_bins'],4], dtype=np.float64)
+                self.target_values = jnp.array(vals, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
+                self.target_error = jnp.array(errs, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
+                print(self.target_values.shape, self.target_error.shape)
                 target_binids = f['main'][kwargs['target_bins'],0]
             else:
-                self.target_values = jnp.array(f['main'][:,1], dtype=np.float64)
-                self.target_error = jnp.array(f['main'][:,4], dtype=np.float64)
+                self.target_values = jnp.array(vals, dtype=np.float64)
+                self.target_error = jnp.array(errs, dtype=np.float64)
                 target_binids = f['main'][:,0]
             #change format from target h5 to match h5 file from pythia
             target_binids = [str(b,'utf8') for b in target_binids]
@@ -219,13 +229,15 @@ class Paramtune:
     # It's in attributes of the param table of h5, so polyfit needs to be changed too
     def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = False):
         std = 1
-        confidence_level = 0.68268949 #within 1 standard deviation
+        confidence_level = 0.68268949 #within 1 standard deviation?
         edof = dof_scale*(self.ndf)
         target_dev = chi2.ppf(confidence_level, edof)
         print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
         minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
         if new_figure: plt.figure()
         if self.fits.dim == 1:
+            if self.fits.mc_target_X and new_figure:
+                plt.axvline(x = self.fits.mc_target_X, color = 'g', label = "target = " + str(self.fits.mc_target_X))
             graph_density = 1000
             if graph_range is None:
                 x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
@@ -235,11 +247,11 @@ class Paramtune:
             objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
             objective_opt = self.objective(self.p_opt.x, *self.obj_args)
             y = objective_x - objective_opt
-            p = plt.plot(x, y, label = self.objective_name)
+            p = plt.plot(x, y, label = self.objective_name + " = [{:.4f}]".format(float(self.p_opt.x)))
             plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
 
             plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
-            within_error = jnp.where(y < target_dev)[0] # possibly vulnerable to non-solution local minima below target dev
+            within_error = jnp.where(y < target_dev)[0] # vulnerable to non-solution local minima below target dev
             if len(within_error) > 0:
                 low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
                 plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
@@ -307,12 +319,18 @@ class Paramtune:
         plt.xticks([])
         plt.yticks([])
         plt.legend(fontsize=8)
+        plt.rcParams.update(plt.rcParamsDefault)
 
 
     # probably don't call if there are many observables w/ target data
-    def graph_envelope_target(self, save_folder = None):
+    def graph_envelope_target(self, observable = None, save_folder = None):
         place = 0
-        for obs_name in self.fits.obs_index.keys():
+        if observable:
+            obs_names = [observable]
+        else:
+            obs_names = self.fits.obs_index.keys()
+
+        for obs_name in obs_names:
             target_bins = len(jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name])))
             if target_bins > 0:
                 self.fits.graph_envelope([obs_name])

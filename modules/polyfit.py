@@ -70,6 +70,7 @@ class Polyfit:
         input_h5 -- the name of an h5 file with MC run results
         order -- the order of polynomial to fit each bin with
         reg_mode -- regression mode, default to lst_sq
+        pdf_uncertainty -- quadratically add pdf uncertainty to error
         """
 
         if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
@@ -109,10 +110,23 @@ class Polyfit:
                 #filter out bins with name that does not match fit_obs
                 invalid = jnp.array([i for i, bin in enumerate(self.bin_ids) if not any([obs in bin for obs in fit_obs])])
                 self.Y = jnp.delete(self.Y, invalid, axis=0)
+                self.Y_err = jnp.delete(self.Y_err, invalid, axis=0)
                 self.bin_ids = np.delete(self.bin_ids, invalid)
             
-            #remove a column from the fit data for new experiment
-
+            #remove a column from the fit data for new experiment 
+            self.mc_target_X = None
+            self.mc_target = None
+            self.mc_target_err = None
+            if 'mc_target' in kwargs.keys():
+                invalid = kwargs['mc_target']
+                self.mc_target_X = self.X[invalid]
+                self.mc_target = self.Y[:, invalid]
+                self.mc_target_err = self.Y_err[:, invalid]
+                print("mc_target: ", invalid, " param value: ", self.mc_target_X)
+                self.X = jnp.delete(self.X, invalid, axis=0)
+                self.Y = jnp.delete(self.Y, invalid, axis=1)
+                self.Y_err = jnp.delete(self.Y_err, invalid, axis=1)
+            
             #sample mc_runs. Number of used bins is consistent (we just filtered bins).
             if not sample is None:                                         #(num MC runs)
                 if type(sample) is int and sample > self.dim and sample <= self.X.shape[0]:
@@ -234,7 +248,7 @@ class Polyfit:
                 print("merging data with different order/dim is not allowed(error)")
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
 
-            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']
+            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'mc_target_X', 'mc_target', 'mc_target_err', 'X', 'Y']
             if self.has_cov: jnp_vars.append('cov')
             for str in jnp_vars: #jnp: numbers only
                 if new:
@@ -260,7 +274,7 @@ class Polyfit:
         all_npz -- filepath for npz file of data
         """
         all_dict = {}
-        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'bin_ids', 'dim', 'order']
+        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'mc_target_X', 'mc_target', 'mc_target_err', 'bin_ids', 'dim', 'order']
         if self.has_cov: all_vars.append('cov') 
         for str in all_vars:
             all_dict[str] = getattr(self, str)
