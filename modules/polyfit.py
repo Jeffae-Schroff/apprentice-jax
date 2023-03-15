@@ -113,7 +113,7 @@ class Polyfit:
                 self.Y_err = jnp.delete(self.Y_err, invalid, axis=0)
                 self.bin_ids = np.delete(self.bin_ids, invalid)
             
-            #remove a column from the fit data for new experiment 
+            #if mc_target, remove a column from the fit data for new experiment 
             self.mc_target_X = None
             self.mc_target = None
             self.mc_target_err = None
@@ -147,6 +147,20 @@ class Polyfit:
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
+            # add pdf_uncertainty to y_err
+            if 'pdf_uncertainty' in kwargs.keys() and kwargs['pdf_uncertainty']:
+                for bin_id in self.bin_ids:
+                    obs_name, bin_num = bin_id.split('#')[0], bin_id.split('#')[1]
+                    if obs_name in self.obs_index:
+                        bin_Y = self.Y[self.bin_idn(bin_id),:]
+                        bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
+                        pdf_ids = [obs_name + '#' + bin_num for obs_name in self.obs_index[obs_name] if ':pdf:' in obs_name]
+                        pdf_err = jnp.array([abs(bin_Y - self.Y[self.bin_idn(p),:]) for p in pdf_ids])
+                        pdf_err = jnp.max(pdf_err, axis=0)
+                        if(max(pdf_err) > 0):
+                            print("pdf: ", pdf_err)
+                        self.Y_err = self.Y_err.at[self.bin_idn(bin_id),:].set(jnp.sqrt(jnp.square(bin_Y_err) + jnp.square(pdf_err)))
+
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
             #TODO: consider use for asymmetric uncertainty
@@ -248,8 +262,9 @@ class Polyfit:
                 print("merging data with different order/dim is not allowed(error)")
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
 
-            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'mc_target_X', 'mc_target', 'mc_target_err', 'X', 'Y']
+            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err']
             if self.has_cov: jnp_vars.append('cov')
+            if 'mc_target' in all_dict.keys(): jnp_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
             for str in jnp_vars: #jnp: numbers only
                 if new:
                     setattr(self, str, jnp.array(all_dict[str]))
@@ -274,8 +289,9 @@ class Polyfit:
         all_npz -- filepath for npz file of data
         """
         all_dict = {}
-        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'mc_target_X', 'mc_target', 'mc_target_err', 'bin_ids', 'dim', 'order']
+        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'dim', 'order']
         if self.has_cov: all_vars.append('cov') 
+        if not self.mc_target is None: jnp_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
         for str in all_vars:
             all_dict[str] = getattr(self, str)
         jnp.savez(all_npz, **all_dict)

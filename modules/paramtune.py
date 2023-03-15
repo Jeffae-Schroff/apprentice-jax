@@ -61,7 +61,6 @@ class Paramtune:
             else: 
                 vals = f['main'][:,1]
                 errs = f['main'][:,4]
-            print(vals.shape, errs.shape)
             if 'target_bins' in kwargs.keys():
                 self.target_values = jnp.array(vals, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
                 self.target_error = jnp.array(errs, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
@@ -236,7 +235,7 @@ class Paramtune:
         minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
         if new_figure: plt.figure()
         if self.fits.dim == 1:
-            if self.fits.mc_target_X and new_figure:
+            if hasattr(self.fits, "mc_target") and self.fits.mc_target_X and new_figure:
                 plt.axvline(x = self.fits.mc_target_X, color = 'g', label = "target = " + str(self.fits.mc_target_X))
             graph_density = 1000
             if graph_range is None:
