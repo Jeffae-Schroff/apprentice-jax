@@ -7,7 +7,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax.config import config
-jax.config.update("jax_enable_x64", True)
+
 
 
 
@@ -70,12 +70,13 @@ class Polyfit:
         input_h5 -- the name of an h5 file with MC run results
         order -- the order of polynomial to fit each bin with
         reg_mode -- regression mode, default to lst_sq
-        pdf_uncertainty -- quadratically add pdf uncertainty to error
         """
-
         if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
-            if 'cpu' in kwargs.keys() and kwargs['cpu']:
-                config.update('jax_platform_name', 'cpu')
+            # jax.config.update('jax_platform_name', 'cpu')
+            # before execute any computation / allocation
+            print(jax.numpy.ones(3).device()) # TFRT_CPU_0
+            print(jax.process_index())
+
             self.input_h5 = kwargs['input_h5']
             self.order = kwargs['order']
             self.has_cov = kwargs['covariance']
@@ -88,48 +89,17 @@ class Polyfit:
             f = h5py.File(self.input_h5, "r")
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
             self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
-            self.Y_err = jnp.array(f['errors'][:], dtype=jnp.float64)
             self.bin_ids = np.array([x.decode() for x in f.get("index")[:]])
             self.dim = self.X.shape[1]
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order) 
 
             #filter out bins with invalid value (>1000) for any mc_run
-            if self.reg_mode=='ridge_w':
-                invalid = jnp.array(jnp.any((abs(self.Y[:,:]) > 1000)|(self.Y_err[:,:] == 0.0), axis = 1).nonzero()[0])
-            else: #Seems redundant but I am keeping this as a placeholder, allowing 0 values here seems to break something in paramtune for very large data sets
-                invalid = jnp.array(jnp.any((abs(self.Y[:,:]) > 1000)|(self.Y_err[:,:] == 0.0), axis = 1).nonzero()[0])
+            invalid = jnp.array(jnp.any(abs(self.Y[:,:]) > 1000, axis = 1).nonzero()[0])
             if len(invalid) > 0:
                 print("Filtered", len(invalid), "of", len(self.bin_ids), "total bins for invalid input")
             self.Y = jnp.delete(self.Y, invalid, axis=0)
-            self.Y_err = jnp.delete(self.Y_err, invalid, axis=0)
             self.bin_ids = np.delete(self.bin_ids, invalid)
-            
-            # If fit_obs is in arugments, it is a list of which observables to use (by order in the input file)
-            if 'fit_obs' in kwargs.keys():
-                #Won't truncate e.g. d100, but will add leading zeroes to single digits to match pythia (?) format
-                fit_obs = ['d' + str(obs).zfill(2) + '-' for obs in kwargs['fit_obs']]
-                print("Choosing to fit observables with", fit_obs)
 
-                #filter out bins with name that does not match fit_obs
-                invalid = jnp.array([i for i, bin in enumerate(self.bin_ids) if not any([obs in bin for obs in fit_obs])])
-                self.Y = jnp.delete(self.Y, invalid, axis=0)
-                self.Y_err = jnp.delete(self.Y_err, invalid, axis=0)
-                self.bin_ids = np.delete(self.bin_ids, invalid)
-            
-            #if mc_target, remove a column from the fit data for new experiment 
-            self.mc_target_X = None
-            self.mc_target = None
-            self.mc_target_err = None
-            if 'mc_target' in kwargs.keys():
-                invalid = kwargs['mc_target']
-                self.mc_target_X = self.X[invalid]
-                self.mc_target = self.Y[:, invalid]
-                self.mc_target_err = self.Y_err[:, invalid]
-                print("mc_target: ", invalid, " param value: ", self.mc_target_X)
-                self.X = jnp.delete(self.X, invalid, axis=0)
-                self.Y = jnp.delete(self.Y, invalid, axis=1)
-                self.Y_err = jnp.delete(self.Y_err, invalid, axis=1)
-            
             #sample mc_runs. Number of used bins is consistent (we just filtered bins).
             if not sample is None:                                         #(num MC runs)
                 if type(sample) is int and sample > self.dim and sample <= self.X.shape[0]:
@@ -144,50 +114,32 @@ class Polyfit:
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
             # If bin not a key in index yet, start a new list as its value. Append count to bin's value. 
-            [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]  
+            [self.index.setdefault(bin.split('#')[0], []).append(count) for count,bin in enumerate(self.bin_ids)]            
             # keys observable names to their error names
             self.obs_index = {}
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
-            # add pdf_uncertainty to y_err
-            if 'pdf_uncertainty' in kwargs.keys() and kwargs['pdf_uncertainty']:
-                for bin_id in self.bin_ids:
-                    obs_name, bin_num = bin_id.split('#')[0], bin_id.split('#')[1]
-                    if obs_name in self.obs_index:
-                        bin_Y = self.Y[self.bin_idn(bin_id),:]
-                        bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
-                        pdf_ids = [obs_name + '#' + bin_num for obs_name in self.obs_index[obs_name] if ':pdf:' in obs_name]
-                        pdf_err = jnp.array([abs(bin_Y - self.Y[self.bin_idn(p),:]) for p in pdf_ids])
-                        pdf_err = jnp.max(pdf_err, axis=0)
-                        if(max(pdf_err) > 0):
-                            print("pdf: ", pdf_err)
-                        self.Y_err = self.Y_err.at[self.bin_idn(bin_id),:].set(jnp.sqrt(jnp.square(bin_Y_err) + jnp.square(pdf_err)))
-
+            
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
-            #TODO: consider use for asymmetric uncertainty
+            #TODO: make uncertainty symmetric if we can't do asymmetric
             VM = self.vandermonde_jax(self.X, self.order)
-            self.p_coeffs, self.p_coeffs_err, self.chi2ndf, self.res = [],[],[],[]
+            self.p_coeffs, self.chi2ndf, self.res = [],[],[]
             if self.has_cov: self.cov = []
-
             debug=0 ##TODO: DELETE
             for bin_count, bin_id in enumerate(self.bin_ids):
+                if 'num_bins' in kwargs.keys() and bin_count >= kwargs['num_bins']:
+                    break
                 print("\rFitting {:d} of {:d}: {:60s}".format(bin_count + 1, self.Y.shape[0], bin_id), end='')
                 
                 bin_Y = self.Y[self.bin_idn(bin_id),:]
-                bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
-
+                
                 #polynomialapproximation.coeffsolve2 code
-                obj_args = (bin_Y, bin_Y_err, VM, self.reg_param)
+                obj_args = (bin_Y, VM, self.reg_param)
                 if self.reg_mode == 'ridge':
                     guess = jnp.zeros((VM.shape[1],), dtype=jnp.float32)
                     c_opt = opt.minimize(self.ridge_obj, guess, args=obj_args, method='Nelder-Mead')
-                    bin_p_coeffs = c_opt.x
-                    bin_res = [jnp.sum(jnp.square(bin_Y-VM@bin_p_coeffs))]
-                elif self.reg_mode == 'ridge_w':
-                    guess = jnp.zeros((VM.shape[1],), dtype=jnp.float32)
-                    c_opt = opt.minimize(self.ridge_obj_w, guess, args=obj_args, method='Nelder-Mead')
                     bin_p_coeffs = c_opt.x
                     bin_res = [jnp.sum(jnp.square(bin_Y-VM@bin_p_coeffs))]
                 else:
@@ -201,22 +153,18 @@ class Polyfit:
                 self.chi2ndf.append(bin_chi2/(self.num_coeffs-1)) #because it's supposed to be /ndf
                 
                 #Calculating covariance of coefficients using inverse Hessian
-                def mini_res_sq(coeff):
+                def res_sq(coeff):
                     return jnp.sum(jnp.square(bin_Y-VM@coeff))
-                def mini_ridge(coeff):
-                    return self.ridge_obj(coeff, bin_Y, bin_Y_err, VM, self.reg_param)
-                def mini_ridge_w(coeff):
-                    return self.ridge_obj_w(coeff, bin_Y, bin_Y_err, VM, self.reg_param)
+                def ridge(coeff):
+                    return self.ridge_obj(coeff, bin_Y, VM, self.reg_param)
                 def Hessian(func):
                     return jax.jacfwd(jax.jacrev(func))
                 #polynomialapproximation.fit code
                 if self.has_cov:
                     if self.reg_mode == 'ridge':
-                        pcov = jnp.linalg.inv(Hessian(mini_ridge)(bin_p_coeffs))
-                    elif self.reg_mode == 'ridge_w':
-                        pcov = jnp.linalg.inv(Hessian(mini_ridge_w)(bin_p_coeffs))
+                        pcov = jnp.linalg.inv(Hessian(ridge)(bin_p_coeffs))
                     else:
-                        pcov = jnp.linalg.inv(Hessian(mini_res_sq)(bin_p_coeffs))
+                        pcov = jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs))
                     fac = bin_res[0] / (VM.shape[0]-VM.shape[1])
                     self.cov.append(pcov*fac)
 
@@ -231,15 +179,15 @@ class Polyfit:
                             print("Y: ", bin_Y)
                             print("bin_p_coeff: ", bin_p_coeffs)
                             print("\nVM matrix: \n", VM)
-                            print("\nInverse Hessian of lst_sq: \n ", jnp.linalg.inv(Hessian(mini_res_sq)(bin_p_coeffs)))
-                            print("\nInverse Hessian of ridge: \n ", jnp.linalg.inv(Hessian(mini_ridge)(bin_p_coeffs)))
-                            jnp.save('polyfit_inv_hess_lst_sq', jnp.linalg.inv(Hessian(mini_res_sq)(bin_p_coeffs)))
+                            print("\nInverse Hessian of lst_sq: \n ", jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs)))
+                            print("\nInverse Hessian of ridge: \n ", jnp.linalg.inv(Hessian(ridge)(bin_p_coeffs)))
+                            jnp.save('polyfit_inv_hess_lst_sq', jnp.linalg.inv(Hessian(res_sq)(bin_p_coeffs)))
                         debug=0
                     # self.cov.append(cov*fac)
 
                     #print(bin_id, "\n", bin_p_coeffs, "\n", jnp.sqrt(jnp.diagonal(self.cov[bin_idn])), "\nend")
                     #print(bin_id, bin_p_coeffs, self.cov[bin_id], " end")
-            print("\nFits written to", npz_file)
+            print("\nFits written to ", npz_file)
             if npz_file is not None:
                 self.save(npz_file)
 
@@ -265,9 +213,8 @@ class Polyfit:
                 print("merging data with different order/dim is not allowed(error)")
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
 
-            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err']
+            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y']
             if self.has_cov: jnp_vars.append('cov')
-            if 'mc_target' in all_dict.keys(): jnp_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
             for str in jnp_vars: #jnp: numbers only
                 if new:
                     setattr(self, str, jnp.array(all_dict[str]))
@@ -292,9 +239,8 @@ class Polyfit:
         all_npz -- filepath for npz file of data
         """
         all_dict = {}
-        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'dim', 'order']
+        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'bin_ids', 'dim', 'order']
         if self.has_cov: all_vars.append('cov') 
-        if not self.mc_target is None: jnp_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
         for str in all_vars:
             all_dict[str] = getattr(self, str)
         jnp.savez(all_npz, **all_dict)
@@ -455,12 +401,7 @@ class Polyfit:
     #target: y-values given in data
     #VM: terms of polynomial given by vandermonde_jax
     #alpha: ridge parameter
-    def ridge_obj_w(self, coeff, target, target_err, VM, alpha):
-        w_res_sq = jnp.sum(jnp.square((target - VM@coeff)/target_err))
-        penalty = alpha*(coeff@coeff)
-        return w_res_sq + penalty
-    
-    def ridge_obj(self, coeff, target, target_err, VM, alpha):
+    def ridge_obj(self, coeff, target, VM, alpha):
         res_sq = jnp.sum(jnp.square(target - VM@coeff))
         penalty = alpha*(coeff@coeff)
         return res_sq + penalty

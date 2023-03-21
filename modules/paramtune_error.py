@@ -3,13 +3,14 @@ import scipy.optimize as opt
 from scipy.stats import chi2
 import matplotlib.pyplot as plt
 from modules.polyfit import Polyfit
-from itertools import product
 import json
 import h5py
 import jax
 import jax.numpy as jnp
 from jax.config import config
 config.update('jax_enable_x64', True)
+config.update('jax_platform_name', 'cpu')
+
 
 """
         TODO: Convert documentation to actual doc using str.__doc__
@@ -38,8 +39,6 @@ class Paramtune:
         The output of the optimization. Use p_opt.x to obtain tuned parameters.
     cov : 
         Covariance matrix associated with the tuned parameters.
-    mc_target :
-        run number, Do tune on the mc_run specified in self.fits
 
 
     Methods
@@ -48,44 +47,32 @@ class Paramtune:
     """
 
     def __init__(self, npz_file, target_file, initial_guess = 'sample_range', **kwargs):
-        if 'cpu' in kwargs.keys() and kwargs['cpu']:
-            config.update('jax_platform_name', 'cpu')
         self.fits = Polyfit(npz_file, covariance = kwargs['covariance'])
         file_ending = target_file.split('.')[-1]
         if file_ending == "h5":
             f = h5py.File(target_file, "r")
-            # target_bins specifies which bins to tune on
-            if 'mc_target' in kwargs.keys():
-                vals = self.fits.mc_target
-                errs = self.fits.mc_target_err
-            else: 
-                vals = f['main'][:,1]
-                errs = f['main'][:,4]
             if 'target_bins' in kwargs.keys():
-                self.target_values = jnp.array(vals, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
-                self.target_error = jnp.array(errs, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
-                print(self.target_values.shape, self.target_error.shape)
-                target_binids = f['main'][kwargs['target_bins'],0]
+                target_binids = f['main'][:,0][kwargs['target_bins']]
             else:
-                self.target_values = jnp.array(vals, dtype=np.float64)
-                self.target_error = jnp.array(errs, dtype=np.float64)
                 target_binids = f['main'][:,0]
             #change format from target h5 to match h5 file from pythia
             target_binids = [str(b,'utf8') for b in target_binids]
-            #find target_binidns (for MC data) in fits index
+            #find target_binidns in fits index
             self.target_binidns = jnp.array([self.fits.bin_idn(b) for b in target_binids])
+            self.target_values = jnp.array(f['main'][:,1], dtype=np.float64)[kwargs['target_bins']]
+            self.target_error = jnp.array(f['main'][:,7], dtype=np.float64)[kwargs['target_bins']]
         elif file_ending == "json":
             # use all target data in json
             with open(target_file, 'r') as f:
                 target_data = json.loads(f.read())
+            self.target_binidns = jnp.array(range(self.fits.p_coeffs.shape[0]))
             self.target_values = jnp.array([target_data[k][0] for k in target_data])
             self.target_error = jnp.array([target_data[k][1] for k in target_data])
-            self.target_binidns = jnp.array(range(self.fits.p_coeffs.shape[0]))
         else:
             print("bad file ending")
             return
 
-        # Filter out target data if value 0, error 0. Filter out if binidn is -1 (polyfit did not fit the bin)
+        # Filter out target data if value 0, error 0. Filter out if binidn is -1
         valid = []
         for i, (binidn, value, error) in enumerate(zip(self.target_binidns, self.target_values, self.target_error)):
             if not (value == 0 and error == 0) and binidn != -1:
@@ -114,9 +101,7 @@ class Paramtune:
         else:
             print("error in inital guess") 
             return
-
-        bounds = jnp.column_stack((self.fits.X.min(axis = 0),self.fits.X.max(axis = 0)))
-        self.p_opt = opt.minimize(self.objective, initial_guess, bounds = bounds, args = self.obj_args, method='TNC')
+        self.p_opt = opt.minimize(self.objective, initial_guess, args = self.obj_args, method='TNC')
 
         # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],
         # args = self.obj_args, method='TNC',tol=1e-6, options={'maxiter':1000, 'accuracy':1e-6})
@@ -124,8 +109,7 @@ class Paramtune:
         
 
         opt_obj = self.objective(self.p_opt.x, *self.obj_args)
-        chi_2_unscaled = self.lst_sq(self.p_opt.x, self.target_values, self.fits.p_coeffs)
-        print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", chi_2_unscaled/self.ndf)
+        print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", opt_obj/self.ndf)
 
         #Calculating covariance of parameters by means of inverse Hessian
         coeff_target_bins = jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0)
@@ -176,17 +160,6 @@ class Paramtune:
             sum_over = sum_over + adj_res_sq
         return sum_over
     
-    #lst_sq objective function, not used for tuning, only to calculate chi2
-    def lst_sq(self, params, d, coeff):
-        sum_over = 0
-        poly = self.fits.vandermonde_jax([params], self.fits.order)[0]
-
-        #Loop over the bins
-        for i in self.target_binidns: #Finding uncertainty of surrogate function at point p
-            adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/d[i] #Inner part of summation
-            sum_over = sum_over + adj_res_sq
-        return sum_over
-
     # TODO: parallelize. Does it make sense for this to be attached to a specific paramtune object? 
     def graph_chi2_sample(self, input_h5, num_samples, sample_prop, color,
      new_figure = True, save_figure = None, graph_range = [0.1,1000], save_file = None, **kwargs):
@@ -201,7 +174,7 @@ class Paramtune:
         p_opt, chi2ndf = [],[]
         for i in range(num_samples):
             #temporarily replace self.fits with a Polyfit made with mc_run sample.
-            self.fits = Polyfit(None, sample = sample_size, input_h5 = input_h5,
+            self.fits = Polyfit(None, sample_size, False, input_h5 = input_h5,
             order = self.fits.order, covariance = self.fits.has_cov, **kwargs)
 
             #set up objective arguments using sampled Polyfit
@@ -238,17 +211,15 @@ class Paramtune:
 
     #TODO: Record param name(s) so this can take param name(s) and visualize that param
     # It's in attributes of the param table of h5, so polyfit needs to be changed too
-    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = False):
+    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None):
         std = 1
-        confidence_level = 0.68268949 #within 1 standard deviation?
+        confidence_level = 0.68268949 * std #within 1 standard deviation
         edof = dof_scale*(self.ndf)
         target_dev = chi2.ppf(confidence_level, edof)
         print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
         minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
         if new_figure: plt.figure()
         if self.fits.dim == 1:
-            if hasattr(self.fits, "mc_target") and self.fits.mc_target_X and new_figure:
-                plt.axvline(x = self.fits.mc_target_X, color = 'g', label = "target = " + str(self.fits.mc_target_X))
             graph_density = 1000
             if graph_range is None:
                 x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
@@ -258,11 +229,11 @@ class Paramtune:
             objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
             objective_opt = self.objective(self.p_opt.x, *self.obj_args)
             y = objective_x - objective_opt
-            p = plt.plot(x, y, label = self.objective_name + " = [{:.4f}]".format(float(self.p_opt.x)))
+            p = plt.plot(x, y, label = self.objective_name)
             plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
 
             plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
-            within_error = jnp.where(y < target_dev)[0] # vulnerable to non-solution local minima below target dev
+            within_error = jnp.where(y < target_dev)[0] # possibly vulnerable to local minima
             if len(within_error) > 0:
                 low_bound, high_bound = x[within_error[0]], x[within_error[-1]] 
                 plt.plot([], [], color = p[-1].get_color(), linestyle = 'dotted', 
@@ -273,80 +244,42 @@ class Paramtune:
             plt.legend()
             plt.title('Parameter regions within ' + str(std) + ' std of tuned result')
             plt.ylabel('Objective - Optimal objective')
-            plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic w/ update to Harvey's h5
-            if log_scale: 
+            plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic
+            #use logscale if the graph is really spiky
+            if(max(y) > target_dev*200): 
                 plt.yscale("log")
-            else:
-                plt.ylim((0, 200))
         else:
             print("not implemented")
         if not graph_file == None:
             plt.savefig(graph_file)
 
-    def graph_tune(self, obs_name, graph_file = None, new_figure = True, ylim = None):
+    def graph_tune(self, obs_name, graph_file = None):
         #only select binids from obs_name for which there is target data
         obs_bin_idns = jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name]))
-        poly_opt = self.fits.vandermonde_jax([self.p_opt.x], self.fits.order)[0]
+        poly_opt = self.fits.vandermonde_jax([self.p_opt.x], 3)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
-        target_y = [self.target_values[jnp.where(self.target_binidns == b)[0][0]] for b in obs_bin_idns]
-
-        if new_figure: 
-            plt.title("Tune of " + obs_name)
-            plt.figure()
-            #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
-            plt.ylabel("Placeholder")
-            plt.xlabel(obs_name + " bins")
-        
+        plt.figure()
+        plt.title("Placeholder")
+        #Might be something like "number of events", but depends on what observable is, find in Harvey's h5 file
+        plt.ylabel("Placeholder")
+        plt.xlabel(obs_name + " bins")
         num_bins = len(obs_bin_idns)
-        num_ticks = num_bins #make whole numbers        7 if num_bins > 14 else 
+        num_ticks = 7 if num_bins > 14 else num_bins #make whole numbers
         plt.xticks([round(x/num_ticks) for x in range(0, num_bins*num_ticks, num_bins)]+[num_bins])
-        if ylim:
-            plt.ylim(ylim)
-
         edges = range(num_bins + 1)
-        plt.stairs(target_y, edges, label = 'Target Data')
-        plt.stairs(tuned_y, edges, label = 'Surrogate(P_opt)')
-        if new_figure:
-            plt.legend()
+        plt.stairs([self.target_values[b] for b in obs_bin_idns], edges, label = 'Target Data')
+        plt.stairs(tuned_y, edges, label = 'Surrogate(Tuned Parameters)')
         
+        plt.legend()
         if not graph_file == None: plt.savefig(graph_file)
     
-    def graph_tune_all(self, save_folder = None):
-        to_graph = []
-        for obs_name in self.fits.obs_index.keys():
-            target_bins = len(jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name])))
-            if target_bins > 0:
-                to_graph.append(obs_name)
-        subplot_width = np.ceil(np.sqrt(len(to_graph)+1)).astype(int)
-        fig, ax = plt.subplots(subplot_width, subplot_width)
-        fig.tight_layout()
-        for obs_name, i in zip(to_graph, range(1,len(to_graph)+1)):
-            plt.rcParams['axes.titlesize'] = 8
-            plt.subplot(subplot_width,subplot_width,i,title=obs_name.split('/')[-1])
-            self.graph_tune(obs_name, new_figure = False, ylim = [0, jnp.max(self.target_values)*1.1])
-        plt.subplot(subplot_width,subplot_width,subplot_width**2,title='legend',frame_on=False)
-        plt.plot(0, 0, label = 'Target Data')
-        plt.plot(0, 0, label = 'Surrogate(P_opt)')
-        plt.xticks([])
-        plt.yticks([])
-        plt.legend(fontsize=8)
-        plt.rcParams.update(plt.rcParamsDefault)
-
-
-    # probably don't call if there are many observables w/ target data
-    def graph_envelope_target(self, observable = None, save_folder = None):
+    # probably don't call if there are more than 20 observables w/ target data
+    def graph_envelope_target(self):
         place = 0
-        if observable:
-            obs_names = [observable]
-        else:
-            obs_names = self.fits.obs_index.keys()
-
-        for obs_name in obs_names:
+        for obs_name in self.fits.obs_index.keys():
             target_bins = len(jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name])))
             if target_bins > 0:
                 self.fits.graph_envelope([obs_name])
                 plt.stairs(self.target_values[place:place+target_bins], range(target_bins + 1), label = 'target')
                 plt.legend()
                 place += target_bins
-                if(save_folder):
-                    plt.savefig(save_folder + "/" + obs_name + ".pdf")
