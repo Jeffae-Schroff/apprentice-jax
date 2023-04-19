@@ -70,6 +70,7 @@ class Polyfit:
         input_h5 -- the name of an h5 file with MC run results
         order -- the order of polynomial to fit each bin with
         reg_mode -- regression mode, default to lst_sq
+        pdf_uncertainty -- quadratically add pdf uncertainty to error
         """
 
         if 'input_h5' in kwargs.keys() and 'order' in kwargs.keys() and 'covariance' in kwargs.keys():
@@ -174,6 +175,21 @@ class Polyfit:
                             if cut_id == obs_list[i]:
                                 self.obs_weights = self.obs_weights.at[j].set(weight)
 
+            
+            #if mc_target, remove a column from the fit data for new experiment 
+            self.mc_target_X = None
+            self.mc_target = None
+            self.mc_target_err = None
+            if 'mc_target' in kwargs.keys():
+                invalid = kwargs['mc_target']
+                self.mc_target_X = self.X[invalid]
+                self.mc_target = self.Y[:, invalid]
+                self.mc_target_err = self.Y_err[:, invalid]
+                print("mc_target: ", invalid, " param value: ", self.mc_target_X)
+                self.X = jnp.delete(self.X, invalid, axis=0)
+                self.Y = jnp.delete(self.Y, invalid, axis=1)
+                self.Y_err = jnp.delete(self.Y_err, invalid, axis=1)
+            
             #sample mc_runs. Number of used bins is consistent (we just filtered bins).
             if not sample is None:                                         #(num MC runs)
                 if type(sample) is int and sample > self.dim and sample <= self.X.shape[0]:
@@ -199,6 +215,20 @@ class Polyfit:
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
+            # add pdf_uncertainty to y_err
+            if 'pdf_uncertainty' in kwargs.keys() and kwargs['pdf_uncertainty']:
+                for bin_id in self.bin_ids:
+                    obs_name, bin_num = bin_id.split('#')[0], bin_id.split('#')[1]
+                    if obs_name in self.obs_index:
+                        bin_Y = self.Y[self.bin_idn(bin_id),:]
+                        bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
+                        pdf_ids = [obs_name + '#' + bin_num for obs_name in self.obs_index[obs_name] if ':pdf:' in obs_name]
+                        pdf_err = jnp.array([abs(bin_Y - self.Y[self.bin_idn(p),:]) for p in pdf_ids])
+                        pdf_err = jnp.max(pdf_err, axis=0)
+                        if(max(pdf_err) > 0):
+                            print("pdf: ", pdf_err)
+                        self.Y_err = self.Y_err.at[self.bin_idn(bin_id),:].set(jnp.sqrt(jnp.square(bin_Y_err) + jnp.square(pdf_err)))
+
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
             #TODO: consider use for asymmetric uncertainty
@@ -307,8 +337,9 @@ class Polyfit:
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
             self.skip_idn = all_dict['skip_idn']
 
-            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'obs_weights']
+            jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'obs_weights']
             if self.has_cov: jnp_vars.append('cov')
+            if 'mc_target' in all_dict.keys(): jnp_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
             for str in jnp_vars: #jnp: numbers only
                 if new:
                     setattr(self, str, jnp.array(all_dict[str]))
@@ -333,8 +364,9 @@ class Polyfit:
         all_npz -- filepath for npz file of data
         """
         all_dict = {}
-        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'bin_ids', 'obs_weights', 'dim', 'order', 'skip_idn']
+        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'obs_weights', 'dim', 'order', 'skip_idn']
         if self.has_cov: all_vars.append('cov') 
+        if not self.mc_target is None: all_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
         for str in all_vars:
             all_dict[str] = getattr(self, str)
         jnp.savez(all_npz, **all_dict)
