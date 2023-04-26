@@ -87,7 +87,7 @@ class Paramtune:
         # Filter out target data if value 0, error 0. Filter out if binidn is -1 (polyfit did not fit the bin)
         valid = []
         for i, (binidn, value, error) in enumerate(zip(self.target_binidns, self.target_values, self.target_error)):
-            if not (value == 0 and error == 0) and binidn != -1:
+            if not (value == 0 and error == 0) and binidn != -1 and (not binidn in self.fits.skip_idn):
                 valid.append(i)
         
         self.target_binidns = jnp.take(self.target_binidns, jnp.array(valid))
@@ -103,6 +103,13 @@ class Paramtune:
             self.objective = self.objective_func_no_err
             self.objective_name ='no_err'
         
+        #DEBUG
+        jnp.save('obj_args/target_values.npy', self.target_values)
+        jnp.save('obj_args/target_error.npy', self.target_error)
+        jnp.save('obj_args/coeffs.npy', jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
+        jnp.save('obj_args/coeff_cov.npy', jnp.take(self.fits.cov, self.target_binidns, axis = 0))
+        jnp.save('obj_args/targ_bins.npy', self.target_binidns)
+
         self.ndf = len(self.target_binidns) - self.fits.dim
 
         if initial_guess is None:
@@ -116,14 +123,14 @@ class Paramtune:
 
         bounds = jnp.column_stack((self.fits.X.min(axis = 0),self.fits.X.max(axis = 0)))
         self.p_opt = opt.minimize(self.objective, initial_guess, bounds = bounds, args = self.obj_args, method='TNC')
-
+        jnp.save('obj_args/p_opt.npy', self.p_opt.x)
         # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],
         # args = self.obj_args, method='TNC',tol=1e-6, options={'maxiter':1000, 'accuracy':1e-6})
         # temp to match apprentice.
         
 
         opt_obj = self.objective(self.p_opt.x, *self.obj_args)
-        chi_2_unscaled = self.lst_sq(self.p_opt.x, self.target_values, self.fits.p_coeffs)
+        chi_2_unscaled = self.objective(self.p_opt.x, *self.obj_args)
         print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", chi_2_unscaled/self.ndf)
 
         #Calculating covariance of parameters by means of inverse Hessian
@@ -131,7 +138,7 @@ class Paramtune:
         def obj_mini(param):
             return self.objective(param, *self.obj_args)
         def Hessian(func):
-            return jax.jacfwd(jax.jacrev(obj_mini))
+            return jax.jacfwd(jax.jacrev(func))
         cov = jnp.linalg.inv(Hessian(obj_mini)(self.p_opt.x))
         fac = obj_mini(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
         self.cov = cov*fac
@@ -153,38 +160,38 @@ class Paramtune:
             print("initial guess calulation method invalid")
 
     #Objective function which considers the errors in the inner-loop coefficients
-    def objective_func(self, params, d, d_sig, coeff, cov):
+    def objective_func(self, p, d, d_sig, coeff, cov):
         sum_over = 0
-        poly = self.fits.vandermonde_jax([params], self.fits.order)[0]
-
+        poly = self.fits.vandermonde_jax([p], self.fits.order)[0]
+        norm = jnp.sum(self.fits.obs_weights)
         #Loop over the bins
         for i in self.target_binidns:
             f_sig = jnp.sqrt(jnp.matmul(poly, jnp.matmul(cov[i], poly.T))) #Finding uncertainty of surrogate function at point p
-            adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2 + f_sig**2) #Inner part of summation
+            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2 + f_sig**2) #Inner part of summation
             sum_over = sum_over + adj_res_sq
-        return sum_over
+        return sum_over/norm
 
     #Objective function which does not consider the errors in the inner-loop coefficients
     def objective_func_no_err(self, p, d, d_sig, coeff):
         sum_over = 0
         poly = self.fits.vandermonde_jax([p], self.fits.order)[0]
-
+        norm = jnp.sum(self.fits.obs_weights)
         #Loop over the bins
         for i in range(jnp.size(jnp.array(coeff), axis=0)):
-            adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2) #Inner part of summation
+            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2) #Inner part of summation
             sum_over = sum_over + adj_res_sq
-        return sum_over
+        return sum_over/norm
     
     #lst_sq objective function, not used for tuning, only to calculate chi2
     def lst_sq(self, params, d, coeff):
         sum_over = 0
-        poly = self.fits.vandermonde_jax([params], self.fits.order)[0]
-
+        poly = self.fits.vandermonde_jax([params] , self.fits.order)[0]
+        norm = jnp.sum(self.fits.obs_weights)
         #Loop over the bins
         for i in self.target_binidns: #Finding uncertainty of surrogate function at point p
-            adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/d[i] #Inner part of summation
+            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/d[i] #Inner part of summation
             sum_over = sum_over + adj_res_sq
-        return sum_over
+        return sum_over/norm
 
     # TODO: parallelize. Does it make sense for this to be attached to a specific paramtune object? 
     def graph_chi2_sample(self, input_h5, num_samples, sample_prop, color,
