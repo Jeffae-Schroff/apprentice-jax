@@ -64,7 +64,6 @@ class Paramtune:
             if 'target_bins' in kwargs.keys():
                 self.target_values = jnp.array(vals, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
                 self.target_error = jnp.array(errs, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
-                print(self.target_values.shape, self.target_error.shape)
                 target_binids = f['main'][kwargs['target_bins'],0]
             else:
                 self.target_values = jnp.array(vals, dtype=np.float64)
@@ -238,28 +237,33 @@ class Paramtune:
 
     #TODO: Record param name(s) so this can take param name(s) and visualize that param
     # It's in attributes of the param table of h5, so polyfit needs to be changed too
-    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = False):
+    def graph_objective(self, graph_p, center = None, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = False):
         std = 1
         confidence_level = 0.68268949 #within 1 standard deviation?
         edof = dof_scale*(self.ndf)
         target_dev = chi2.ppf(confidence_level, edof)
         print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
-        minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
+        if center is None:
+            center = self.p_opt.x
         if new_figure: plt.figure()
-        if self.fits.dim == 1:
+        if not isinstance(graph_p, list) or len(graph_p) == 1:
+            graph_i = np.where(self.fits.param_names == graph_p)[0][0]
             if hasattr(self.fits, "mc_target") and self.fits.mc_target_X and new_figure:
                 plt.axvline(x = self.fits.mc_target_X, color = 'g', label = "target = " + str(self.fits.mc_target_X))
             graph_density = 1000
+            minX, maxX = self.fits.X.min(axis = 0)[graph_i], self.fits.X.max(axis = 0)[graph_i]
             if graph_range is None:
-                x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
+                x = jnp.arange(minX, maxX, (maxX-minX)/graph_density)
             else:
                 x = jnp.arange(graph_range[0], graph_range[1], (graph_range[1]-graph_range[0])/graph_density)
-
-            objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
+            X = jnp.tile(center, (x.size,1))
+            X = X.at[:,graph_i].set(x)
+            
+            objective_x = jnp.apply_along_axis(self.objective, 1, X, *self.obj_args)
             objective_opt = self.objective(self.p_opt.x, *self.obj_args)
             y = objective_x - objective_opt
-            p = plt.plot(x, y, label = self.objective_name + " = [{:.4f}]".format(float(self.p_opt.x)))
-            plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
+            p = plt.plot(x, y, label = self.objective_name + " = [{:.4f}]".format(float(center[graph_i])))
+            plt.plot(center[graph_i], 0, color = p[-1].get_color(), marker = 'o', markersize=4)
 
             plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
             within_error = jnp.where(y < target_dev)[0] # vulnerable to non-solution local minima below target dev
@@ -273,11 +277,11 @@ class Paramtune:
             plt.legend()
             plt.title('Parameter regions within ' + str(std) + ' std of tuned result')
             plt.ylabel('Objective - Optimal objective')
-            plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic w/ update to Harvey's h5
+            plt.xlabel("{}: [{:.4f}, {:.4f}]".format(self.fits.param_names[graph_i], minX, maxX)) 
             if log_scale: 
                 plt.yscale("log")
             else:
-                plt.ylim((0, 200))
+                plt.ylim((0, 10*objective_opt))
         else:
             print("not implemented")
         if not graph_file == None:

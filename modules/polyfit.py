@@ -87,6 +87,7 @@ class Polyfit:
 
             f = h5py.File(self.input_h5, "r")
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
+            self.param_names = np.array(f['params'].attrs['names']).astype(str) #apprentice stored it this way after merging yoda files
             self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
             self.Y_err = jnp.array(f['errors'][:], dtype=jnp.float64)
             self.bin_ids = np.array([x.decode() for x in f.get("index")[:]])
@@ -258,11 +259,11 @@ class Polyfit:
         if all_npz is None:
              all_dict = {}
         else:
-            all_dict = jnp.load(all_npz, allow_pickle=True)
+            all_dict = np.load(all_npz, allow_pickle=True)
             if new:
-                self.order, self.dim = all_dict['order'], all_dict['dim']
-            elif self.order != all_dict['order'] or self.dim != all_dict['dim']:
-                print("merging data with different order/dim is not allowed(error)")
+                self.order, self.dim, self.param_names = all_dict['order'], all_dict['dim'], all_dict['param_names']
+            elif self.order != all_dict['order'] or self.dim != all_dict['dim'] or self.param_names != all_dict['param_names']:
+                print("merging data with different order/dim/param_names is not allowed(error)")
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
 
             jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err']
@@ -292,12 +293,12 @@ class Polyfit:
         all_npz -- filepath for npz file of data
         """
         all_dict = {}
-        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'dim', 'order']
+        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'dim', 'order', 'param_names']
         if self.has_cov: all_vars.append('cov') 
-        if not self.mc_target is None: jnp_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
+        if not self.mc_target is None: all_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
         for str in all_vars:
             all_dict[str] = getattr(self, str)
-        jnp.savez(all_npz, **all_dict)
+        np.savez(all_npz, **all_dict)
 
     def graph_bin(self, bin_id):
         """
