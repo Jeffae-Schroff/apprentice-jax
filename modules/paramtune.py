@@ -104,11 +104,11 @@ class Paramtune:
             self.objective_name ='no_err'
         
         #DEBUG
-        jnp.save('obj_args/target_values.npy', self.target_values)
-        jnp.save('obj_args/target_error.npy', self.target_error)
-        jnp.save('obj_args/coeffs.npy', jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
-        jnp.save('obj_args/coeff_cov.npy', jnp.take(self.fits.cov, self.target_binidns, axis = 0))
-        jnp.save('obj_args/targ_bins.npy', self.target_binidns)
+        # jnp.save('obj_args/target_values.npy', self.target_values)
+        # jnp.save('obj_args/target_error.npy', self.target_error)
+        # jnp.save('obj_args/coeffs.npy', jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
+        # jnp.save('obj_args/coeff_cov.npy', jnp.take(self.fits.cov, self.target_binidns, axis = 0))
+        # jnp.save('obj_args/targ_bins.npy', self.target_binidns)
 
         self.ndf = len(self.target_binidns) - self.fits.dim
 
@@ -255,8 +255,8 @@ class Paramtune:
         if new_figure: plt.figure()
         if not isinstance(graph_p, list) or len(graph_p) == 1:
             graph_i = np.where(self.fits.param_names == graph_p)[0][0]
-            if hasattr(self.fits, "mc_target") and self.fits.mc_target_X and new_figure:
-                plt.axvline(x = self.fits.mc_target_X, color = 'g', label = "target = " + str(self.fits.mc_target_X))
+            if hasattr(self.fits, "mc_target") and self.fits.mc_target_X.any() and new_figure:
+                plt.axvline(x = self.fits.mc_target_X[graph_i], color = 'g', label = "target = " + str(self.fits.mc_target_X[graph_i]))
             graph_density = 1000
             minX, maxX = self.fits.X.min(axis = 0)[graph_i], self.fits.X.max(axis = 0)[graph_i]
             if graph_range is None:

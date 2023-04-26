@@ -135,7 +135,7 @@ class Polyfit:
             if 'select_obs' in kwargs.keys():
                 obs_list = kwargs['select_obs']
                 id_cut = np.array([sb[0] for sb in np.char.rsplit(self.bin_ids, "#", maxsplit=1)])  #Removes bin numbers from index, leaving only a list of observable names
-                inv = np.array([i for i, str in enumerate(id_cut) if not str in obs_list])
+                inv = np.array([i for i, string in enumerate(id_cut) if not string in obs_list])
                 print("Fitting observables ", obs_list)
 
                 self.Y = jnp.delete(self.Y, inv, axis=0)
@@ -156,10 +156,10 @@ class Polyfit:
                     id_cut_rev = np.flip(id_cut)
 
                     inv = np.array([])
-                    for i, str in enumerate(id_cut_rev):
-                        if clear_dict[str] > 0:
+                    for i, string in enumerate(id_cut_rev):
+                        if clear_dict[string] > 0:
                             inv = np.append(inv, i)
-                            clear_dict[str] -= 1
+                            clear_dict[string] -= 1
 
                     inv = np.flip(np.array([np.size(id_cut_rev) - 1 - i for i in inv])).astype(int)
                     self.Y = jnp.delete(self.Y, inv, axis=0)
@@ -340,12 +340,12 @@ class Polyfit:
 
             jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'obs_weights']
             if self.has_cov: jnp_vars.append('cov')
-            if 'mc_target' in all_dict.keys(): jnp_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
-            for str in jnp_vars: #jnp: numbers only
+            if 'mc_target' in all_dict.keys(): jnp_vars.extend(['mc_target_X', 'mc_target', 'mc_target_err'])
+            for string in jnp_vars: #jnp: numbers only
                 if new:
-                    setattr(self, str, jnp.array(all_dict[str]))
+                    setattr(self, string, jnp.array(all_dict[string]))
                 else:
-                    setattr(self, str, jnp.concatenate([getattr(self, str), all_dict[str]]))
+                    setattr(self, string, jnp.concatenate([getattr(self, string), all_dict[string]]))
             
         # We recalculate index, obs_index from bin_ids. I decided to just store bin_ids because 
         # 1. npz likes np lists only and
@@ -367,9 +367,9 @@ class Polyfit:
         all_dict = {}
         all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'obs_weights', 'dim', 'order', 'skip_idn', 'param_names']
         if self.has_cov: all_vars.append('cov') 
-        if not self.mc_target is None: all_vars.append(['mc_target_X', 'mc_target', 'mc_target_err'])
-        for str in all_vars:
-            all_dict[str] = getattr(self, str)
+        if not self.mc_target is None: all_vars.extend(['mc_target_X', 'mc_target', 'mc_target_err'])
+        for string in all_vars:
+            all_dict[string] = getattr(self, string)
         np.savez(all_npz, **all_dict)
 
     def graph_bin(self, bin_id):
