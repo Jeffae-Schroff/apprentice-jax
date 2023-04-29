@@ -91,7 +91,7 @@ class Polyfit:
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
             self.param_names = np.array(f['params'].attrs['names']).astype(str) #apprentice stored it this way after merging yoda files
             self.Y = jnp.array(f['values'][:], dtype=jnp.float64) #num_bins * num_mc_runs array
-            self.Y_err = jnp.array(f['errors'][:], dtype=jnp.float64)
+            self.Y_err = jnp.array(f['total_err'][:], dtype=jnp.float64)
             self.bin_ids = np.array([x.decode() for x in f.get("index")[:]])
             self.obs_weights = jnp.ones(jnp.shape(self.bin_ids))
             self.original_dim = len(self.bin_ids)
@@ -202,10 +202,6 @@ class Polyfit:
                 else:
                     print("invalid sample input")
             
-            #Add small amount to each Y_err (ONLY TO PREVENT ERRORS WHILE WE HAVENT SEPARATED OBSERVABLE ERRORS FROM OBSERVABLES IN THE INPUT DATA)
-            #TODO: DELETE THIS AFTER SEPARATING
-            min_val = jnp.min(self.Y_err[jnp.nonzero(self.Y_err)])
-            self.Y_err_adj = self.Y_err + min_val
 
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
@@ -249,10 +245,10 @@ class Polyfit:
                 
                 bin_Y = self.Y[self.bin_idn(bin_id),:]
                 bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
-                bin_Y_err_adj = self.Y_err_adj[self.bin_idn(bin_id),:]  #TEMPORARY ONLY DELETE AFTER FORMAT CHANGE
-
-                if not jnp.any(bin_Y):
-                    print("\nBin ", bin_count, " identically zero across all runs, skipping!")
+                bin_Y_err_is_zero = jnp.array([bin_Y_err == 0])
+                #Skip empty bins
+                if not jnp.any(bin_Y) or not jnp.any(bin_Y_err) or VM.shape[0] - jnp.sum(bin_Y_err_is_zero) <= VM.shape[1]:
+                    print("\nBin ", bin_count, " identically zero or has too many zero error across all runs, skipping!")
                     skip_list.write(bin_id + "\n")
                     self.skip_idn.append(bin_count)
                     skip_count += 1
@@ -262,33 +258,39 @@ class Polyfit:
                     if self.has_cov:
                         self.cov.append(jnp.zeros((VM.shape[1],VM.shape[1]), dtype=jnp.float32))
                     continue
-
+                
+                #Skip runs with 0 systematic error
+                bin_Y = bin_Y[bin_Y_err != 0]
+                bin_VM = VM[bin_Y_err != 0]
+                bin_Y_err_adj = bin_Y_err[bin_Y_err != 0]
+                
                 #polynomialapproximation.coeffsolve2 code
-
+                
+            
                 if self.reg_mode == 'ridge':
                     self.objective_func = self.ridge_obj
-                    obj_args = (bin_Y, VM, self.reg_param)
+                    obj_args = (bin_Y, bin_VM, self.reg_param)
                 elif self.reg_mode == 'ridge_w':
                     self.objective_func = self.ridge_obj_w
-                    obj_args = (bin_Y, bin_Y_err_adj, VM, self.reg_param)
+                    obj_args = (bin_Y, bin_Y_err_adj, bin_VM, self.reg_param)
                 elif self.reg_mode == 'lasso':
                     self.objective_func = self.lasso_obj
-                    obj_args = (bin_Y, VM, self.reg_param)
+                    obj_args = (bin_Y, bin_VM, self.reg_param)
                 elif self.reg_mode == 'lasso_w':
                     self.objective_func = self.lasso_obj_w
-                    obj_args = (bin_Y, bin_Y_err_adj, VM, self.reg_param)
+                    obj_args = (bin_Y, bin_Y_err_adj, bin_VM, self.reg_param)
                 elif self.reg_mode == 'lst_sq_w':
                     self.objective_func = self.lst_sq_w
-                    obj_args = (bin_Y, bin_Y_err_adj, VM)
+                    obj_args = (bin_Y, bin_Y_err_adj, bin_VM)
                 else:
-                    obj_args = (bin_Y, VM)
+                    obj_args = (bin_Y, bin_VM)
 
-                guess = jnp.zeros((VM.shape[1],), dtype=jnp.float32)
+                guess = jnp.zeros((bin_VM.shape[1],), dtype=jnp.float32)
                 c_opt = opt.minimize(self.objective_func, guess, args=obj_args, method='Nelder-Mead')
                 bin_p_coeffs = c_opt.x
-                bin_res = [jnp.sum(jnp.square(bin_Y-VM@bin_p_coeffs))]
+                bin_res = [jnp.sum(jnp.square(bin_Y-bin_VM@bin_p_coeffs))]
 
-                surrogate_Y = self.surrogate(self.X, bin_p_coeffs)
+                surrogate_Y = self.surrogate(self.X, bin_p_coeffs)[bin_Y_err != 0]
                 bin_chi2 = jnp.sum(jnp.divide(jnp.power((bin_Y - surrogate_Y), 2), surrogate_Y))
 
                 self.p_coeffs.append(bin_p_coeffs.tolist())
@@ -303,13 +305,14 @@ class Polyfit:
                 #polynomialapproximation.fit code
                 if self.has_cov:
                     pcov = jnp.linalg.inv(Hessian(mini_obj)(bin_p_coeffs))
-                    fac = bin_res[0] / (VM.shape[0]-VM.shape[1])
+                    fac = bin_res[0] / (bin_VM.shape[0]-bin_VM.shape[1])
                     self.cov.append(pcov*fac)
 
                     # #Old code!
                     """cov = np.linalg.inv(VM.T@VM)
                     fac = bin_res / (VM.shape[0]-VM.shape[1])"""
-                
+                if jnp.any(jnp.isinf(pcov)):
+                    print(bin_id)
             print("\n", skip_count, " bins skipped for zeros.")        
             print("\nFits written to", npz_file)
             if npz_file is not None:
