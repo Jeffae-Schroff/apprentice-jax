@@ -137,7 +137,7 @@ class Polyfit:
             if 'select_obs' in kwargs.keys():
                 obs_list = kwargs['select_obs']
                 id_cut = np.array([sb[0] for sb in np.char.rsplit(self.bin_ids, "#", maxsplit=1)])  #Removes bin numbers from index, leaving only a list of observable names
-                inv = np.array([i for i, string in enumerate(id_cut) if not string in obs_list])
+                inv = np.array([i for i, string in enumerate(id_cut) if not string in obs_list]).astype('int64')
                 print("Fitting observables ", obs_list)
 
                 self.Y = jnp.delete(self.Y, inv, axis=0)
@@ -201,6 +201,7 @@ class Polyfit:
                     sample_which = jnp.array(random.sample(range(self.X.shape[0]), sample))
                     self.X = jnp.take(self.X, sample_which, axis=0)
                     self.Y = jnp.take(self.Y, sample_which, axis=1)
+                    self.Y_err = jnp.take(self.Y_err, sample_which, axis=1)
                 else:
                     print("invalid sample input")
             
