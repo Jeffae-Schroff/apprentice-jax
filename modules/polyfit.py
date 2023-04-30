@@ -81,11 +81,13 @@ class Polyfit:
             self.has_cov = kwargs['covariance']
             self.reg_mode = 'lst_sq'
             self.reg_param = 0
+            self.fit_error_surrogate = True
             self.objective_func = self.lst_sq
             if 'reg_mode' in kwargs.keys():
                 self.reg_mode = kwargs['reg_mode']
                 self.reg_param = kwargs['reg_param']
-            
+            if 'fit_error_surrogate' in kwargs.keys():
+                self.fit_error_surrogate = False
 
             f = h5py.File(self.input_h5, "r")
             self.X = jnp.array(f['params'][:], dtype=jnp.float64) #num_mc_runs * dim array
@@ -212,19 +214,19 @@ class Polyfit:
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
-            # add pdf_uncertainty to y_err
-            if 'pdf_uncertainty' in kwargs.keys() and kwargs['pdf_uncertainty']:
-                for bin_id in self.bin_ids:
-                    obs_name, bin_num = bin_id.split('#')[0], bin_id.split('#')[1]
-                    if obs_name in self.obs_index:
-                        bin_Y = self.Y[self.bin_idn(bin_id),:]
-                        bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
-                        pdf_ids = [obs_name + '#' + bin_num for obs_name in self.obs_index[obs_name] if ':pdf:' in obs_name]
-                        pdf_err = jnp.array([abs(bin_Y - self.Y[self.bin_idn(p),:]) for p in pdf_ids])
-                        pdf_err = jnp.max(pdf_err, axis=0)
-                        if(max(pdf_err) > 0):
-                            print("pdf: ", pdf_err)
-                        self.Y_err = self.Y_err.at[self.bin_idn(bin_id),:].set(jnp.sqrt(jnp.square(bin_Y_err) + jnp.square(pdf_err)))
+            # # add pdf_uncertainty to y_err
+            # if 'pdf_uncertainty' in kwargs.keys() and kwargs['pdf_uncertainty']:
+            #     for bin_id in self.bin_ids:
+            #         obs_name, bin_num = bin_id.split('#')[0], bin_id.split('#')[1]
+            #         if obs_name in self.obs_index:
+            #             bin_Y = self.Y[self.bin_idn(bin_id),:]
+            #             bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
+            #             pdf_ids = [obs_name + '#' + bin_num for obs_name in self.obs_index[obs_name] if ':pdf:' in obs_name]
+            #             pdf_err = jnp.array([abs(bin_Y - self.Y[self.bin_idn(p),:]) for p in pdf_ids])
+            #             pdf_err = jnp.max(pdf_err, axis=0)
+            #             if(max(pdf_err) > 0):
+            #                 print("pdf: ", pdf_err)
+            #             self.Y_err = self.Y_err.at[self.bin_idn(bin_id),:].set(jnp.sqrt(jnp.square(bin_Y_err) + jnp.square(pdf_err)))
 
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
@@ -253,6 +255,7 @@ class Polyfit:
                     self.skip_idn.append(bin_count)
                     skip_count += 1
                     self.p_coeffs.append(jnp.zeros((VM.shape[1],), dtype=jnp.float32).tolist())
+                    self.p_coeffs_err.append(jnp.zeros((VM.shape[1],), dtype=jnp.float32).tolist())
                     self.res.append(0) #bin_res comes out of lstsq as a list
                     self.chi2ndf.append(0) #because it's supposed to be /ndf
                     if self.has_cov:
@@ -266,7 +269,9 @@ class Polyfit:
                 
                 #polynomialapproximation.coeffsolve2 code
                 
-            
+                if self.fit_error_surrogate:
+                    obj_args_err = (bin_Y_err_adj, bin_VM, self.reg_param)
+
                 if self.reg_mode == 'ridge':
                     self.objective_func = self.ridge_obj
                     obj_args = (bin_Y, bin_VM, self.reg_param)
@@ -288,6 +293,7 @@ class Polyfit:
                 guess = jnp.zeros((bin_VM.shape[1],), dtype=jnp.float32)
                 c_opt = opt.minimize(self.objective_func, guess, args=obj_args, method='Nelder-Mead')
                 bin_p_coeffs = c_opt.x
+                
                 bin_res = [jnp.sum(jnp.square(bin_Y-bin_VM@bin_p_coeffs))]
 
                 surrogate_Y = self.surrogate(self.X, bin_p_coeffs)[bin_Y_err != 0]
@@ -296,6 +302,11 @@ class Polyfit:
                 self.p_coeffs.append(bin_p_coeffs.tolist())
                 self.res.append(bin_res[0]) #bin_res comes out of lstsq as a list
                 self.chi2ndf.append(bin_chi2/(self.num_coeffs-1)) #because it's supposed to be /ndf
+                
+                if self.fit_error_surrogate:
+                    c_opt_err = opt.minimize(self.ridge_obj, guess, args=obj_args_err, method='Nelder-Mead')
+                    bin_p_coeffs_err = c_opt_err.x
+                    self.p_coeffs_err.append(bin_p_coeffs_err.tolist())
                 
                 #Calculating covariance of coefficients using inverse Hessian
                 def mini_obj(coeff):
@@ -340,9 +351,11 @@ class Polyfit:
                 print("merging data with different order/dim/param_names is not allowed(error)")
             self.num_coeffs = self.numCoeffsPoly(self.dim, self.order)
             self.skip_idn = all_dict['skip_idn']
+            self.fit_error_surrogate = all_dict['fit_error_surrogate']
 
             jnp_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'obs_weights']
             if self.has_cov: jnp_vars.append('cov')
+            if self.fit_error_surrogate: jnp_vars.append('p_coeffs_err')
             if 'mc_target' in all_dict.keys(): jnp_vars.extend(['mc_target_X', 'mc_target', 'mc_target_err'])
             for string in jnp_vars: #jnp: numbers only
                 if new:
@@ -368,8 +381,10 @@ class Polyfit:
         all_npz -- filepath for npz file of data
         """
         all_dict = {}
-        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'obs_weights', 'dim', 'order', 'skip_idn', 'param_names']
+        all_vars = ['p_coeffs', 'chi2ndf', 'res', 'X', 'Y', 'Y_err', 'bin_ids', 'obs_weights', 'dim', 'order', 'skip_idn', 'param_names', 'fit_error_surrogate']
         if self.has_cov: all_vars.append('cov') 
+        if self.fit_error_surrogate:
+            all_vars.append('p_coeffs_err')
         if not self.mc_target is None: all_vars.extend(['mc_target_X', 'mc_target', 'mc_target_err'])
         for string in all_vars:
             all_dict[string] = getattr(self, string)
