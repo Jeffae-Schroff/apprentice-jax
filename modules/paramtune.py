@@ -61,7 +61,7 @@ class Paramtune:
             else: 
                 vals = f['main'][:,1]
                 errs = f['main'][:,4]
-            if 'target_bins' in kwargs.keys():
+            if 'target_bins' in kwargs.keys() and kwargs['target_bins'] != None:
                 self.target_values = jnp.array(vals, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
                 self.target_error = jnp.array(errs, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
                 target_binids = f['main'][kwargs['target_bins'],0]
@@ -215,7 +215,7 @@ class Paramtune:
             if self.fits.has_cov:
                 obj_args = obj_args + (jnp.take(jnp.array(self.fits.cov), self.target_binidns, axis = 0),)
             #do tuning
-            p_opt.append(opt.minimize(self.objective, initial_guess, args = obj_args, method='TNC')) #only saves tuned parans
+            p_opt.append(opt.minimize(self.objective, initial_guess, args = obj_args, method='TNC')) #only saves tuned params
             chi2ndf.append((self.objective(p_opt[i].x, *obj_args)/self.ndf).tolist()) #ndf unchanged by using sample
             print("Sample", i, "Tuned:", p_opt[i].x, "| chi2/ndf:", chi2ndf[i])
         self.fits = og_fits

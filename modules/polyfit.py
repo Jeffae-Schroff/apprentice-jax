@@ -135,7 +135,7 @@ class Polyfit:
             if 'select_obs' in kwargs.keys():
                 obs_list = kwargs['select_obs']
                 id_cut = np.array([sb[0] for sb in np.char.rsplit(self.bin_ids, "#", maxsplit=1)])  #Removes bin numbers from index, leaving only a list of observable names
-                inv = np.array([i for i, string in enumerate(id_cut) if not string in obs_list])
+                inv = np.array([i for i, string in enumerate(id_cut) if not string in obs_list]).astype('int64')
                 print("Fitting observables ", obs_list)
 
                 self.Y = jnp.delete(self.Y, inv, axis=0)
@@ -199,6 +199,7 @@ class Polyfit:
                     sample_which = jnp.array(random.sample(range(self.X.shape[0]), sample))
                     self.X = jnp.take(self.X, sample_which, axis=0)
                     self.Y = jnp.take(self.Y, sample_which, axis=1)
+                    self.Y_err = jnp.take(self.Y_err, sample_which, axis=1)
                 else:
                     print("invalid sample input")
             
@@ -212,19 +213,19 @@ class Polyfit:
             [self.obs_index.setdefault(bin_name.split('[')[0], []).append(bin_name) if ('[') in bin_name 
                 else self.obs_index.setdefault(bin_name, []) for bin_name in self.index.keys()]
             
-            # add pdf_uncertainty to y_err
-            if 'pdf_uncertainty' in kwargs.keys() and kwargs['pdf_uncertainty']:
-                for bin_id in self.bin_ids:
-                    obs_name, bin_num = bin_id.split('#')[0], bin_id.split('#')[1]
-                    if obs_name in self.obs_index:
-                        bin_Y = self.Y[self.bin_idn(bin_id),:]
-                        bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
-                        pdf_ids = [obs_name + '#' + bin_num for obs_name in self.obs_index[obs_name] if ':pdf:' in obs_name]
-                        pdf_err = jnp.array([abs(bin_Y - self.Y[self.bin_idn(p),:]) for p in pdf_ids])
-                        pdf_err = jnp.max(pdf_err, axis=0)
-                        if(max(pdf_err) > 0):
-                            print("pdf: ", pdf_err)
-                        self.Y_err = self.Y_err.at[self.bin_idn(bin_id),:].set(jnp.sqrt(jnp.square(bin_Y_err) + jnp.square(pdf_err)))
+            # # add pdf_uncertainty to y_err
+            # if 'pdf_uncertainty' in kwargs.keys() and kwargs['pdf_uncertainty']:
+            #     for bin_id in self.bin_ids:
+            #         obs_name, bin_num = bin_id.split('#')[0], bin_id.split('#')[1]
+            #         if obs_name in self.obs_index:
+            #             bin_Y = self.Y[self.bin_idn(bin_id),:]
+            #             bin_Y_err = self.Y_err[self.bin_idn(bin_id),:]
+            #             pdf_ids = [obs_name + '#' + bin_num for obs_name in self.obs_index[obs_name] if ':pdf:' in obs_name]
+            #             pdf_err = jnp.array([abs(bin_Y - self.Y[self.bin_idn(p),:]) for p in pdf_ids])
+            #             pdf_err = jnp.max(pdf_err, axis=0)
+            #             if(max(pdf_err) > 0):
+            #                 print("pdf: ", pdf_err)
+            #             self.Y_err = self.Y_err.at[self.bin_idn(bin_id),:].set(jnp.sqrt(jnp.square(bin_Y_err) + jnp.square(pdf_err)))
 
             #optimize this loop later
             #we do want to fit curves to every bin name (values and uncertainties) for w_err
