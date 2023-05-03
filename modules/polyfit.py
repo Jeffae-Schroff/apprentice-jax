@@ -194,7 +194,6 @@ class Polyfit:
             #sample mc_runs. Number of used bins is consistent (we just filtered bins).
             if not sample is None:                                         #(num MC runs)
                 if type(sample) is int and sample > self.dim and sample <= self.X.shape[0]:
-                    #TODO: Cori-proof
                     random.seed()
                     sample_which = jnp.array(random.sample(range(self.X.shape[0]), sample))
                     self.X = jnp.take(self.X, sample_which, axis=0)
@@ -202,7 +201,6 @@ class Polyfit:
                     self.Y_err = jnp.take(self.Y_err, sample_which, axis=1)
                 else:
                     print("invalid sample input")
-            
 
             # the index keys bin names to the array indexes in f.get(index) with binids matching that bin name
             self.index = {}
