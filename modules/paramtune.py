@@ -61,10 +61,9 @@ class Paramtune:
             else: 
                 vals = f['main'][:,1]
                 errs = f['main'][:,4]
-            if 'target_bins' in kwargs.keys():
+            if 'target_bins' in kwargs.keys() and kwargs['target_bins'] != None:
                 self.target_values = jnp.array(vals, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
                 self.target_error = jnp.array(errs, dtype=np.float64)[jnp.array(kwargs['target_bins'])]
-                print(self.target_values.shape, self.target_error.shape)
                 target_binids = f['main'][kwargs['target_bins'],0]
             else:
                 self.target_values = jnp.array(vals, dtype=np.float64)
@@ -88,7 +87,7 @@ class Paramtune:
         # Filter out target data if value 0, error 0. Filter out if binidn is -1 (polyfit did not fit the bin)
         valid = []
         for i, (binidn, value, error) in enumerate(zip(self.target_binidns, self.target_values, self.target_error)):
-            if not (value == 0 and error == 0) and binidn != -1:
+            if not (value == 0 and error == 0) and binidn != -1 and (not binidn in self.fits.skip_idn):
                 valid.append(i)
         
         self.target_binidns = jnp.take(self.target_binidns, jnp.array(valid))
@@ -100,10 +99,21 @@ class Paramtune:
             self.obj_args = self.obj_args + (jnp.take(self.fits.cov, self.target_binidns, axis = 0),)
             self.objective = self.objective_func
             self.objective_name = 'cov'
+            if self.fits.fit_error_surrogate:
+                self.obj_args = self.obj_args + (jnp.take(self.fits.p_coeffs_err, self.target_binidns, axis = 0),)
         else:
             self.objective = self.objective_func_no_err
             self.objective_name ='no_err'
         
+        #DEBUG
+        jnp.save('obj_args/target_values.npy', self.target_values)
+        jnp.save('obj_args/target_error.npy', self.target_error)
+        jnp.save('obj_args/coeffs.npy', jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
+        jnp.save('obj_args/coeffs_err.npy', jnp.take(self.fits.p_coeffs_err, self.target_binidns, axis = 0))
+        jnp.save('obj_args/coeff_cov.npy', jnp.take(self.fits.cov, self.target_binidns, axis = 0))
+        jnp.save('obj_args/targ_bins.npy', self.target_binidns)
+
+
         self.ndf = len(self.target_binidns) - self.fits.dim
 
         if initial_guess is None:
@@ -117,14 +127,14 @@ class Paramtune:
 
         bounds = jnp.column_stack((self.fits.X.min(axis = 0),self.fits.X.max(axis = 0)))
         self.p_opt = opt.minimize(self.objective, initial_guess, bounds = bounds, args = self.obj_args, method='TNC')
-
+        jnp.save('obj_args/p_opt.npy', self.p_opt.x)
         # self.p_opt = opt.minimize(self.objective, initial_guess, bounds = [(1,2),(-1.2,-0.8)],
         # args = self.obj_args, method='TNC',tol=1e-6, options={'maxiter':1000, 'accuracy':1e-6})
         # temp to match apprentice.
         
 
         opt_obj = self.objective(self.p_opt.x, *self.obj_args)
-        chi_2_unscaled = self.lst_sq(self.p_opt.x, self.target_values, self.fits.p_coeffs)
+        chi_2_unscaled = self.objective(self.p_opt.x, *self.obj_args)
         print("\rTuned Parameters: ", self.p_opt.x, ", Objective = ", opt_obj, ", chi2/ndf = ", chi_2_unscaled/self.ndf)
 
         #Calculating covariance of parameters by means of inverse Hessian
@@ -132,7 +142,7 @@ class Paramtune:
         def obj_mini(param):
             return self.objective(param, *self.obj_args)
         def Hessian(func):
-            return jax.jacfwd(jax.jacrev(obj_mini))
+            return jax.jacfwd(jax.jacrev(func))
         cov = jnp.linalg.inv(Hessian(obj_mini)(self.p_opt.x))
         fac = obj_mini(self.p_opt.x)/(len(self.target_values) - len(self.p_opt.x))
         self.cov = cov*fac
@@ -154,38 +164,43 @@ class Paramtune:
             print("initial guess calulation method invalid")
 
     #Objective function which considers the errors in the inner-loop coefficients
-    def objective_func(self, params, d, d_sig, coeff, cov):
+    def objective_func(self, p, d, d_sig, coeff, cov, coeff_err = None):
         sum_over = 0
-        poly = self.fits.vandermonde_jax([params], self.fits.order)[0]
-
+        poly = self.fits.vandermonde_jax([p], self.fits.order)[0]
+        norm = jnp.sum(self.fits.obs_weights)
         #Loop over the bins
         for i in self.target_binidns:
-            f_sig = jnp.sqrt(jnp.matmul(poly, jnp.matmul(cov[i], poly.T))) #Finding uncertainty of surrogate function at point p
-            adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2 + f_sig**2) #Inner part of summation
+            
+            f_sig_stat = jnp.sqrt(jnp.matmul(poly, jnp.matmul(cov[i], poly.T))) #Finding stat uncertainty of surrogate function at point p
+            f_sig_sq = f_sig_stat**2
+            if self.fits.fit_error_surrogate:
+                f_sig_sys = jnp.matmul(coeff_err[i], poly.T)
+                f_sig_sq = f_sig_sq + f_sig_sys**2
+            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2 + f_sig_sq) #Inner part of summation
             sum_over = sum_over + adj_res_sq
-        return sum_over
+        return sum_over/norm
 
     #Objective function which does not consider the errors in the inner-loop coefficients
     def objective_func_no_err(self, p, d, d_sig, coeff):
         sum_over = 0
         poly = self.fits.vandermonde_jax([p], self.fits.order)[0]
-
+        norm = jnp.sum(self.fits.obs_weights)
         #Loop over the bins
         for i in range(jnp.size(jnp.array(coeff), axis=0)):
-            adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2) #Inner part of summation
+            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2) #Inner part of summation
             sum_over = sum_over + adj_res_sq
-        return sum_over
+        return sum_over/norm
     
     #lst_sq objective function, not used for tuning, only to calculate chi2
     def lst_sq(self, params, d, coeff):
         sum_over = 0
-        poly = self.fits.vandermonde_jax([params], self.fits.order)[0]
-
+        poly = self.fits.vandermonde_jax([params] , self.fits.order)[0]
+        norm = jnp.sum(self.fits.obs_weights)
         #Loop over the bins
         for i in self.target_binidns: #Finding uncertainty of surrogate function at point p
-            adj_res_sq = (d[i]-jnp.matmul(coeff[i], poly.T))**2/d[i] #Inner part of summation
+            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/d[i] #Inner part of summation
             sum_over = sum_over + adj_res_sq
-        return sum_over
+        return sum_over/norm
 
     # TODO: parallelize. Does it make sense for this to be attached to a specific paramtune object? 
     def graph_chi2_sample(self, input_h5, num_samples, sample_prop, color,
@@ -209,7 +224,7 @@ class Paramtune:
             if self.fits.has_cov:
                 obj_args = obj_args + (jnp.take(jnp.array(self.fits.cov), self.target_binidns, axis = 0),)
             #do tuning
-            p_opt.append(opt.minimize(self.objective, initial_guess, args = obj_args, method='TNC')) #only saves tuned parans
+            p_opt.append(opt.minimize(self.objective, initial_guess, args = obj_args, method='TNC')) #only saves tuned params
             chi2ndf.append((self.objective(p_opt[i].x, *obj_args)/self.ndf).tolist()) #ndf unchanged by using sample
             print("Sample", i, "Tuned:", p_opt[i].x, "| chi2/ndf:", chi2ndf[i])
         self.fits = og_fits
@@ -238,28 +253,33 @@ class Paramtune:
 
     #TODO: Record param name(s) so this can take param name(s) and visualize that param
     # It's in attributes of the param table of h5, so polyfit needs to be changed too
-    def graph_objective(self, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = False):
+    def graph_objective(self, graph_p, center = None, dof_scale = 1, graph_file = None, new_figure = True, graph_range = None, log_scale = False):
         std = 1
         confidence_level = 0.68268949 #within 1 standard deviation?
         edof = dof_scale*(self.ndf)
         target_dev = chi2.ppf(confidence_level, edof)
         print(f"target deviation {target_dev:.4f}, with confidence level {confidence_level:.4f}, edof {edof:.4f}")
-        minX, maxX = self.fits.X.min(axis = 0), self.fits.X.max(axis = 0)
+        if center is None:
+            center = self.p_opt.x
         if new_figure: plt.figure()
-        if self.fits.dim == 1:
-            if hasattr(self.fits, "mc_target") and self.fits.mc_target_X and new_figure:
-                plt.axvline(x = self.fits.mc_target_X, color = 'g', label = "target = " + str(self.fits.mc_target_X))
+        if not isinstance(graph_p, list) or len(graph_p) == 1:
+            graph_i = np.where(self.fits.param_names == graph_p)[0][0]
+            if hasattr(self.fits, "mc_target") and self.fits.mc_target_X.any() and new_figure:
+                plt.axvline(x = self.fits.mc_target_X[graph_i], color = 'g', label = "target = " + str(self.fits.mc_target_X[graph_i]))
             graph_density = 1000
+            minX, maxX = self.fits.X.min(axis = 0)[graph_i], self.fits.X.max(axis = 0)[graph_i]
             if graph_range is None:
-                x = jnp.arange(minX[0], maxX[0], (maxX[0]-minX[0])/graph_density)
+                x = jnp.arange(minX, maxX, (maxX-minX)/graph_density)
             else:
                 x = jnp.arange(graph_range[0], graph_range[1], (graph_range[1]-graph_range[0])/graph_density)
-
-            objective_x = jnp.apply_along_axis(self.objective, 1, jnp.expand_dims(x, axis=1), *self.obj_args)
+            X = jnp.tile(center, (x.size,1))
+            X = X.at[:,graph_i].set(x)
+            
+            objective_x = jnp.apply_along_axis(self.objective, 1, X, *self.obj_args)
             objective_opt = self.objective(self.p_opt.x, *self.obj_args)
             y = objective_x - objective_opt
-            p = plt.plot(x, y, label = self.objective_name + " = [{:.4f}]".format(float(self.p_opt.x)))
-            plt.plot(self.p_opt.x, 0, color = p[-1].get_color(), marker = 'o', markersize=4)
+            p = plt.plot(x, y, label = self.objective_name + " = [{:.4f}]".format(float(center[graph_i])))
+            plt.plot(center[graph_i], 0, color = p[-1].get_color(), marker = 'o', markersize=4)
 
             plt.axhline(target_dev, color = p[-1].get_color(), linestyle = 'dotted')
             within_error = jnp.where(y < target_dev)[0] # vulnerable to non-solution local minima below target dev
@@ -273,19 +293,23 @@ class Paramtune:
             plt.legend()
             plt.title('Parameter regions within ' + str(std) + ' std of tuned result')
             plt.ylabel('Objective - Optimal objective')
-            plt.xlabel('MPIalphaS ' "[{:.4f}, {:.4f}]".format(minX[0], maxX[0])) #TODO make automatic w/ update to Harvey's h5
+            plt.xlabel("{}: [{:.4f}, {:.4f}]".format(self.fits.param_names[graph_i], minX, maxX)) 
             if log_scale: 
                 plt.yscale("log")
             else:
-                plt.ylim((0, 200))
+                plt.ylim((0, 10*objective_opt))
         else:
             print("not implemented")
         if not graph_file == None:
             plt.savefig(graph_file)
+        plt.close()
 
     def graph_tune(self, obs_name, graph_file = None, new_figure = True, ylim = None):
         #only select binids from obs_name for which there is target data
         obs_bin_idns = jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name]))
+        if jnp.shape(obs_bin_idns)[0] == 0: 
+            print('Observable completely filtered out due to too many 0 values')
+            return None
         poly_opt = self.fits.vandermonde_jax([self.p_opt.x], self.fits.order)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
         target_y = [self.target_values[jnp.where(self.target_binidns == b)[0][0]] for b in obs_bin_idns]
@@ -310,6 +334,7 @@ class Paramtune:
             plt.legend()
         
         if not graph_file == None: plt.savefig(graph_file)
+        plt.close()
     
     def graph_tune_all(self, save_folder = None):
         to_graph = []
@@ -331,6 +356,7 @@ class Paramtune:
         plt.yticks([])
         plt.legend(fontsize=8)
         plt.rcParams.update(plt.rcParamsDefault)
+        plt.close()
 
 
     # probably don't call if there are many observables w/ target data
@@ -350,3 +376,5 @@ class Paramtune:
                 place += target_bins
                 if(save_folder):
                     plt.savefig(save_folder + "/" + obs_name + ".pdf")
+                    
+        plt.close()
