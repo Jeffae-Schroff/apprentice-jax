@@ -99,16 +99,20 @@ class Paramtune:
             self.obj_args = self.obj_args + (jnp.take(self.fits.cov, self.target_binidns, axis = 0),)
             self.objective = self.objective_func
             self.objective_name = 'cov'
+            if self.fits.fit_error_surrogate:
+                self.obj_args = self.obj_args + (jnp.take(self.fits.p_coeffs_err, self.target_binidns, axis = 0),)
         else:
             self.objective = self.objective_func_no_err
             self.objective_name ='no_err'
         
         #DEBUG
-        # jnp.save('obj_args/target_values.npy', self.target_values)
-        # jnp.save('obj_args/target_error.npy', self.target_error)
-        # jnp.save('obj_args/coeffs.npy', jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
-        # jnp.save('obj_args/coeff_cov.npy', jnp.take(self.fits.cov, self.target_binidns, axis = 0))
-        # jnp.save('obj_args/targ_bins.npy', self.target_binidns)
+        jnp.save('obj_args/target_values.npy', self.target_values)
+        jnp.save('obj_args/target_error.npy', self.target_error)
+        jnp.save('obj_args/coeffs.npy', jnp.take(self.fits.p_coeffs, self.target_binidns, axis = 0))
+        jnp.save('obj_args/coeffs_err.npy', jnp.take(self.fits.p_coeffs_err, self.target_binidns, axis = 0))
+        jnp.save('obj_args/coeff_cov.npy', jnp.take(self.fits.cov, self.target_binidns, axis = 0))
+        jnp.save('obj_args/targ_bins.npy', self.target_binidns)
+
 
         self.ndf = len(self.target_binidns) - self.fits.dim
 
@@ -160,14 +164,19 @@ class Paramtune:
             print("initial guess calulation method invalid")
 
     #Objective function which considers the errors in the inner-loop coefficients
-    def objective_func(self, p, d, d_sig, coeff, cov):
+    def objective_func(self, p, d, d_sig, coeff, cov, coeff_err = None):
         sum_over = 0
         poly = self.fits.vandermonde_jax([p], self.fits.order)[0]
         norm = jnp.sum(self.fits.obs_weights)
         #Loop over the bins
         for i in self.target_binidns:
-            f_sig = jnp.sqrt(jnp.matmul(poly, jnp.matmul(cov[i], poly.T))) #Finding uncertainty of surrogate function at point p
-            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2 + f_sig**2) #Inner part of summation
+            
+            f_sig_stat = jnp.sqrt(jnp.matmul(poly, jnp.matmul(cov[i], poly.T))) #Finding stat uncertainty of surrogate function at point p
+            f_sig_sq = f_sig_stat**2
+            if self.fits.fit_error_surrogate:
+                f_sig_sys = jnp.matmul(coeff_err[i], poly.T)
+                f_sig_sq = f_sig_sq + f_sig_sys**2
+            adj_res_sq = self.fits.obs_weights[i]*(d[i]-jnp.matmul(coeff[i], poly.T))**2/(d_sig[i]**2 + f_sig_sq) #Inner part of summation
             sum_over = sum_over + adj_res_sq
         return sum_over/norm
 
@@ -293,10 +302,14 @@ class Paramtune:
             print("not implemented")
         if not graph_file == None:
             plt.savefig(graph_file)
+        plt.close()
 
     def graph_tune(self, obs_name, graph_file = None, new_figure = True, ylim = None):
         #only select binids from obs_name for which there is target data
         obs_bin_idns = jnp.intersect1d(self.target_binidns, jnp.array(self.fits.index[obs_name]))
+        if jnp.shape(obs_bin_idns)[0] == 0: 
+            print('Observable completely filtered out due to too many 0 values')
+            return None
         poly_opt = self.fits.vandermonde_jax([self.p_opt.x], self.fits.order)[0]
         tuned_y = jnp.matmul(jnp.array([self.fits.p_coeffs[b] for b in obs_bin_idns]), poly_opt.T)
         target_y = [self.target_values[jnp.where(self.target_binidns == b)[0][0]] for b in obs_bin_idns]
@@ -321,6 +334,7 @@ class Paramtune:
             plt.legend()
         
         if not graph_file == None: plt.savefig(graph_file)
+        plt.close()
     
     def graph_tune_all(self, save_folder = None):
         to_graph = []
@@ -342,6 +356,7 @@ class Paramtune:
         plt.yticks([])
         plt.legend(fontsize=8)
         plt.rcParams.update(plt.rcParamsDefault)
+        plt.close()
 
 
     # probably don't call if there are many observables w/ target data
@@ -361,3 +376,5 @@ class Paramtune:
                 place += target_bins
                 if(save_folder):
                     plt.savefig(save_folder + "/" + obs_name + ".pdf")
+                    
+        plt.close()
